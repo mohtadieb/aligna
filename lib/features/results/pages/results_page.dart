@@ -8,7 +8,9 @@ import '../../../pages/premium/premium_paywall_page.dart';
 import '../../../services/supabase/content_service.dart';
 import '../../../services/supabase/session_service.dart';
 import '../../../services/supabase/results_service.dart';
-import '../../../services/supabase/premium_service.dart';
+
+// ✅ RevenueCat source of truth (same as Home)
+import '../../../services/revenuecat/revenuecat_service.dart';
 
 class ResultsPage extends StatefulWidget {
   final String sessionId;
@@ -22,7 +24,6 @@ class _ResultsPageState extends State<ResultsPage> {
   final _content = ContentService();
   final _sessionService = SessionService();
   final _resultsService = ResultsService();
-  final _premiumService = PremiumService();
 
   bool _loading = true;
 
@@ -36,8 +37,6 @@ class _ResultsPageState extends State<ResultsPage> {
   int _totalQuestions = 0;
   int _myCount = 0;
   int _partnerCount = 0;
-
-  bool _isPremium = false;
 
   RealtimeChannel? _responsesChannel;
   RealtimeChannel? _sessionChannel;
@@ -74,25 +73,17 @@ class _ResultsPageState extends State<ResultsPage> {
     return myId == createdBy ? partnerId : createdBy;
   }
 
-  Future<void> _openPaywall() async {
+  bool get _isPro => RevenueCatService.instance.isPro.value;
+
+  Future<void> _openProPaywall() async {
     final changed = await Navigator.push<bool>(
       context,
       MaterialPageRoute(builder: (_) => const PremiumPaywallPage()),
     );
 
-    // If paywall returns true (or any non-null), refresh premium state
-    if (changed == true && mounted) {
-      await _refreshPremiumOnly();
+    if (changed == true) {
+      await RevenueCatService.instance.refresh();
       if (mounted) setState(() {});
-    }
-  }
-
-  Future<void> _refreshPremiumOnly() async {
-    try {
-      final p = await _premiumService.hasPremium();
-      _isPremium = p;
-    } catch (_) {
-      // If RPC fails, keep previous state (don’t break results)
     }
   }
 
@@ -102,12 +93,9 @@ class _ResultsPageState extends State<ResultsPage> {
     final sb = Supabase.instance.client;
     final myId = sb.auth.currentUser!.id;
 
-    // Premium state (cheap RPC)
-    try {
-      _isPremium = await _premiumService.hasPremium();
-    } catch (_) {
-      // Keep previous value
-    }
+    // Keep RC in sync (safe call)
+    await RevenueCatService.instance.configureIfNeeded();
+    await RevenueCatService.instance.refresh();
 
     // Always fetch session + responses (dynamic)
     final session = await _sessionService.getSession(widget.sessionId);
@@ -259,7 +247,7 @@ class _ResultsPageState extends State<ResultsPage> {
     final buckets = _alignmentBuckets();
     String listOrDash(List<String> items) => items.isEmpty ? '—' : items.join(', ');
 
-    final mismatchLimit = _isPremium ? 20 : 5;
+    final mismatchLimit = _isPro ? 20 : 5;
 
     return Scaffold(
       appBar: AppBar(
@@ -345,7 +333,7 @@ class _ResultsPageState extends State<ResultsPage> {
                         style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800),
                       ),
                     ),
-                    if (!_isPremium)
+                    if (!_isPro)
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                         decoration: BoxDecoration(
@@ -353,7 +341,7 @@ class _ResultsPageState extends State<ResultsPage> {
                           border: Border.all(color: Colors.black12),
                         ),
                         child: const Text(
-                          'Premium',
+                          'Pro',
                           style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
                         ),
                       ),
@@ -366,7 +354,7 @@ class _ResultsPageState extends State<ResultsPage> {
                     'Answer more questions together to unlock insights.',
                     style: TextStyle(color: Colors.black54),
                   )
-                else if (_isPremium) ...[
+                else if (_isPro) ...[
                   Text('🟢 Strong alignment in: ${listOrDash(buckets.strong)}'),
                   const SizedBox(height: 6),
                   Text('🟡 Moderate alignment in: ${listOrDash(buckets.moderate)}'),
@@ -374,7 +362,7 @@ class _ResultsPageState extends State<ResultsPage> {
                   Text('🔴 Major differences in: ${listOrDash(buckets.major)}'),
                 ] else ...[
                   const Text(
-                    'Unlock Premium to see deep insights across modules.',
+                    'Unlock Pro to see deep insights across modules.',
                     style: TextStyle(color: Colors.black54),
                   ),
                   const SizedBox(height: 12),
@@ -382,8 +370,8 @@ class _ResultsPageState extends State<ResultsPage> {
                     width: double.infinity,
                     height: 44,
                     child: ElevatedButton(
-                      onPressed: _openPaywall,
-                      child: const Text('Unlock Premium'),
+                      onPressed: _openProPaywall,
+                      child: const Text('Unlock Pro'),
                     ),
                   ),
                 ],
@@ -427,9 +415,9 @@ class _ResultsPageState extends State<ResultsPage> {
                   style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
                 ),
               ),
-              if (!_isPremium)
+              if (!_isPro)
                 TextButton(
-                  onPressed: _openPaywall,
+                  onPressed: _openProPaywall,
                   child: const Text('Unlock full'),
                 ),
             ],
@@ -442,11 +430,11 @@ class _ResultsPageState extends State<ResultsPage> {
             )
           else ...[
             ..._buildTopMismatches(limit: mismatchLimit),
-            if (!_isPremium)
+            if (!_isPro)
               Padding(
                 padding: const EdgeInsets.only(top: 8),
                 child: Text(
-                  'Showing $mismatchLimit mismatches. Unlock Premium to see more.',
+                  'Showing $mismatchLimit mismatches. Unlock Pro to see more.',
                   style: const TextStyle(color: Colors.black54),
                 ),
               ),
@@ -456,7 +444,7 @@ class _ResultsPageState extends State<ResultsPage> {
 
           // Export gating
           if (_finalReady) ...[
-            if (_isPremium)
+            if (_isPro)
               SizedBox(
                 height: 48,
                 child: ElevatedButton(
@@ -475,13 +463,13 @@ class _ResultsPageState extends State<ResultsPage> {
                     height: 48,
                     width: double.infinity,
                     child: ElevatedButton(
-                      onPressed: _openPaywall,
-                      child: const Text('Unlock Premium to Export'),
+                      onPressed: _openProPaywall,
+                      child: const Text('Unlock Pro to Export'),
                     ),
                   ),
                   const SizedBox(height: 8),
                   const Text(
-                    'Export is a Premium feature.',
+                    'Export is a Pro feature.',
                     style: TextStyle(color: Colors.black54),
                   ),
                 ],
@@ -528,7 +516,6 @@ class _ResultsPageState extends State<ResultsPage> {
     return score.clamp(0, 100);
   }
 
-  // ✅ Overall score across ALL questions (weighted)
   double? _computeOverallScore() {
     if (!_partnerJoined) return null;
 
@@ -562,7 +549,6 @@ class _ResultsPageState extends State<ResultsPage> {
     return score.clamp(0, 100);
   }
 
-  // ✅ Strong / Moderate / Major buckets based on module scores
   ({List<String> strong, List<String> moderate, List<String> major}) _alignmentBuckets({
     double strongThreshold = 80,
     double moderateThreshold = 55,
@@ -597,7 +583,6 @@ class _ResultsPageState extends State<ResultsPage> {
     return (strong: strong, moderate: moderate, major: major);
   }
 
-  // ✅ Smarter text comparisons
   String _normalizeText(String s) {
     var t = s.trim().toLowerCase();
     t = t.replaceAll(RegExp(r'\s+'), ' ');
@@ -611,7 +596,6 @@ class _ResultsPageState extends State<ResultsPage> {
     return t.split(' ').where((w) => w.isNotEmpty).toSet();
   }
 
-  /// 0..1 similarity (1 = identical)
   double _textSimilarity(String a, String b) {
     final A = _tokenize(a);
     final B = _tokenize(b);

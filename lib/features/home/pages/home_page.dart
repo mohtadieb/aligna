@@ -3,6 +3,13 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+// ✅ RevenueCat UI + service
+import 'package:purchases_ui_flutter/purchases_ui_flutter.dart';
+import '../../../services/revenuecat/revenuecat_service.dart';
+
+// ✅ Pro explainer page (single entry point)
+import '../../../pages/premium/premium_paywall_page.dart';
+
 import '../../sessions/pages/create_session_page.dart';
 import '../../sessions/pages/join_session_page.dart';
 import '../../sessions/pages/session_dashboard_page.dart';
@@ -51,7 +58,7 @@ class _HomePageState extends State<HomePage> {
   }
 
   void _listenToAuthChanges() {
-    _authSub = sb.auth.onAuthStateChange.listen((event) {
+    _authSub = sb.auth.onAuthStateChange.listen((event) async {
       final user = sb.auth.currentUser;
 
       // If logged out (or session expired), stop realtime and clear UI
@@ -70,6 +77,10 @@ class _HomePageState extends State<HomePage> {
       // If logged in (or refreshed), ensure realtime is running + reload list
       _setupRealtime();
       _loadMySessions(showLoading: true);
+
+      // ✅ Keep RevenueCat in sync (safe even if already configured)
+      await RevenueCatService.instance.configureIfNeeded();
+      await RevenueCatService.instance.refresh();
     });
   }
 
@@ -295,12 +306,102 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
+  // ✅ Single Pro entry point: always show explainer page first
+  Future<void> _openPro() async {
+    final changed = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(builder: (_) => const PremiumPaywallPage()),
+    );
+
+    if (changed == true) {
+      await RevenueCatService.instance.refresh();
+      if (mounted) setState(() {});
+    }
+  }
+
+  Future<void> _openProManagement() async {
+    await showModalBottomSheet(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('Aligna Pro', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
+                const SizedBox(height: 12),
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.restore),
+                  title: const Text('Restore purchases'),
+                  subtitle: const Text('If you already bought Pro on this account'),
+                  onTap: () async {
+                    Navigator.pop(ctx);
+                    try {
+                      await RevenueCatService.instance.restore();
+                      await RevenueCatService.instance.refresh();
+                      if (!mounted) return;
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Restore complete')),
+                      );
+                      setState(() {});
+                    } catch (e) {
+                      if (!mounted) return;
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text('Restore failed: $e')),
+                      );
+                    }
+                  },
+                ),
+                const Divider(),
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.manage_accounts_outlined),
+                  title: const Text('Customer Center'),
+                  subtitle: const Text('Manage purchases'),
+                  onTap: () async {
+                    Navigator.pop(ctx);
+                    try {
+                      await RevenueCatUI.presentCustomerCenter();
+                    } catch (e) {
+                      if (!mounted) return;
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text('Customer Center failed: $e')),
+                      );
+                    }
+                  },
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _proChip() {
+    return ValueListenableBuilder<bool>(
+      valueListenable: RevenueCatService.instance.isPro,
+      builder: (_, isPro, __) {
+        return TextButton.icon(
+          onPressed: isPro ? _openProManagement : _openPro,
+          icon: Icon(isPro ? Icons.verified : Icons.lock_outline),
+          label: Text(isPro ? 'Pro' : 'Unlock Pro'),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Aligna'),
         actions: [
+          _proChip(),
           IconButton(
             onPressed: () => _loadMySessions(showLoading: true),
             icon: const Icon(Icons.refresh),
@@ -318,7 +419,6 @@ class _HomePageState extends State<HomePage> {
                   );
                 }
               }
-              // RootGate will switch to AuthPage
             },
             icon: const Icon(Icons.logout),
             tooltip: 'Logout',
@@ -447,9 +547,8 @@ class _HomePageState extends State<HomePage> {
                                 borderRadius: BorderRadius.circular(999),
                               ),
                               child: Text(
-                                label.replaceAll(' ✅', ''),
-                                style: const TextStyle(fontWeight: FontWeight.w700),
-                              ),
+                                  label.replaceAll(' ✅', ''),
+                                  style: const TextStyle(fontWeight: FontWeight.w700)),
                             ),
                           ],
                         ),

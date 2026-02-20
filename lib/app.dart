@@ -8,6 +8,8 @@ import 'features/auth/pages/auth_page.dart';
 import 'features/home/pages/home_page.dart';
 import 'features/sessions/pages/join_session_page.dart';
 
+// ✅ RevenueCat bootstrap
+import 'services/revenuecat/revenuecat_service.dart';
 
 class AlignaApp extends StatefulWidget {
   const AlignaApp({super.key});
@@ -113,11 +115,38 @@ class _RootGate extends StatelessWidget {
           return const AuthPage();
         }
 
-        return const HomePage();
+        // ✅ Configure RevenueCat once after login (and keep it out of HomePage lifecycle)
+        return const _PostLoginBootstrap(child: HomePage());
       },
     );
   }
 }
 
+class _PostLoginBootstrap extends StatefulWidget {
+  final Widget child;
+  const _PostLoginBootstrap({required this.child});
 
+  @override
+  State<_PostLoginBootstrap> createState() => _PostLoginBootstrapState();
+}
 
+class _PostLoginBootstrapState extends State<_PostLoginBootstrap> {
+  bool _done = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _runOnce();
+  }
+
+  Future<void> _runOnce() async {
+    if (_done) return;
+    _done = true;
+
+    // ✅ Safe: user exists here.
+    await RevenueCatService.instance.configureIfNeeded();
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
+}
