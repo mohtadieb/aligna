@@ -211,6 +211,165 @@ async function callGeminiWithFallback(opts: {
   return { ok: false as const, lastErr };
 }
 
+// ---------------- Metrics fetch + prompt ----------------
+
+async function fetchCompatibilityMetrics(opts: {
+  supabaseUrl: string;
+  serviceKey: string;
+  sessionId: string;
+}) {
+  const { supabaseUrl, serviceKey, sessionId } = opts;
+
+  // REST RPC endpoint:
+  // POST /rest/v1/rpc/get_session_compatibility_metrics
+  const res = await fetch(`${supabaseUrl}/rest/v1/rpc/get_session_compatibility_metrics`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      apikey: serviceKey,
+      authorization: `Bearer ${serviceKey}`,
+    },
+    body: JSON.stringify({ p_session_id: sessionId }),
+  });
+
+  const raw = await res.text().catch(() => "");
+  if (!res.ok) {
+    console.error("metrics rpc failed:", res.status, raw);
+    return null;
+  }
+
+  try {
+    return JSON.parse(raw);
+  } catch (_) {
+    // Some setups return JSON already; but REST usually returns JSON text.
+    // If parsing fails, just return null to keep summary generation working.
+    console.error("metrics rpc returned non-json:", raw.slice(0, 500));
+    return null;
+  }
+}
+
+function buildSummaryPrompt(args: {
+  sessionStatus: string;
+  compactedAnswers: Array<{ q: string; u: string; a: unknown }>;
+  metrics: any | null;
+}) {
+  const { sessionStatus, compactedAnswers, metrics } = args;
+
+  const metricsBlock = metrics
+    ? `
+COMPATIBILITY METRICS (primary evidence; use these to prioritize what matters):
+- overall_score: ${metrics.overall_score} / 100
+
+- strongest_modules (top 3):
+${JSON.stringify(metrics.strongest_modules)}
+
+- highest_mismatch_modules (top 3):
+${JSON.stringify(metrics.highest_mismatch_modules)}
+
+- top_mismatched_questions (top 5):
+${JSON.stringify(metrics.top_mismatched_questions)}
+
+How to use:
+- Use strongest_modules to choose Strengths that feel specific (not generic).
+- Use highest_mismatch_modules + top_mismatched_questions to choose Risks + Discussion Prompts.
+- Do NOT mention UUIDs or internal IDs in the final output.
+- Paraphrase question_text naturally.
+- If values are short (e.g., "3", "yes/no"), interpret as preferences/importance without overclaiming.
+`
+    : `
+COMPATIBILITY METRICS:
+- Not available. Use answers only; avoid numeric claims about compatibility.
+`;
+
+  return `
+You generate a relationship compatibility summary for TWO people.
+
+Return ONLY valid JSON (no markdown, no code fences, no commentary).
+JSON keys EXACTLY:
+headline (string),
+strengths (array of 3-6 strings),
+risks (array of 3-6 strings),
+discussion_prompts (array of 5-10 strings),
+next_steps (array of 3-6 strings)
+
+Tone: emotionally intelligent, kind, respectful, and actionable.
+Avoid moralizing. Avoid diagnosis/therapy language. Do not shame either person.
+
+SESSION CONTEXT:
+session_status=${sessionStatus}
+
+${metricsBlock}
+
+SUPPORTING ANSWERS (compact; may include free-text):
+answers=${JSON.stringify(compactedAnswers).slice(0, 90000)}
+
+QUALITY RULES:
+- If overall_score is high: celebrate but still include 1–2 meaningful growth edges.
+- If overall_score is medium: focus on practical alignment-building and tradeoffs.
+- If overall_score is low: be gentle, structured, and hopeful—avoid doom language.
+- Prioritize the top mismatched questions for Risks + Discussion Prompts.
+- Do not invent facts not supported by metrics/answers.
+`.trim();
+}
+
+// ---------------- Save helper (metrics column safe) ----------------
+
+async function upsertAiSummary(opts: {
+  supabaseUrl: string;
+  serviceKey: string;
+  sessionId: string;
+  userId: string;
+  summaryString: string;
+  metrics: any | null;
+}) {
+  const { supabaseUrl, serviceKey, sessionId, userId, summaryString, metrics } = opts;
+
+  const baseUrl = `${supabaseUrl}/rest/v1/ai_summaries?on_conflict=session_id,user_id`;
+
+  // Try with metrics first (if we have them)
+  const bodyWithMetrics = JSON.stringify({
+    session_id: sessionId,
+    user_id: userId,
+    summary: summaryString,
+    metrics: metrics ?? null,
+  });
+
+  const bodyWithoutMetrics = JSON.stringify({
+    session_id: sessionId,
+    user_id: userId,
+    summary: summaryString,
+  });
+
+  const headers = {
+    "content-type": "application/json",
+    apikey: serviceKey,
+    authorization: `Bearer ${serviceKey}`,
+    prefer: "resolution=merge-duplicates,return=representation",
+  };
+
+  // Attempt 1
+  const first = await fetch(baseUrl, { method: "POST", headers, body: bodyWithMetrics });
+  if (first.ok) return { ok: true as const };
+
+  const t1 = await first.text().catch(() => "");
+
+  // If metrics column doesn't exist yet (deploy order), retry without metrics
+  const missingMetricsCol =
+    t1.includes('column "metrics" of relation "ai_summaries" does not exist') ||
+    t1.includes("Could not find the 'metrics' column") ||
+    t1.toLowerCase().includes("metrics") && t1.toLowerCase().includes("does not exist");
+
+  if (missingMetricsCol) {
+    const second = await fetch(baseUrl, { method: "POST", headers, body: bodyWithoutMetrics });
+    if (second.ok) return { ok: true as const };
+
+    const t2 = await second.text().catch(() => "");
+    return { ok: false as const, details: t2 || null };
+  }
+
+  return { ok: false as const, details: t1 || null };
+}
+
 serve(async (req) => {
   try {
     if (req.method !== "POST") return json({ error: "Method not allowed" }, 405);
@@ -300,22 +459,18 @@ serve(async (req) => {
       a: r.value,
     }));
 
-    const prompt = `
-You generate a relationship compatibility summary.
+    // 3.5) Fetch structured metrics (primary evidence for higher-quality summaries)
+    const metrics = await fetchCompatibilityMetrics({
+      supabaseUrl,
+      serviceKey,
+      sessionId,
+    });
 
-Return ONLY valid JSON (no markdown, no code fences, no commentary).
-JSON keys EXACTLY:
-headline (string),
-strengths (array of 3-6 strings),
-risks (array of 3-6 strings),
-discussion_prompts (array of 5-10 strings),
-next_steps (array of 3-6 strings)
-
-Tone: warm, neutral, actionable, respectful.
-
-session_status=${session.status}
-answers=${JSON.stringify(compact).slice(0, 90000)}
-`.trim();
+    const prompt = buildSummaryPrompt({
+      sessionStatus: session.status,
+      compactedAnswers: compact,
+      metrics,
+    });
 
     // 4) Call Gemini with fallback + retry
     const first = await callGeminiWithFallback({
@@ -356,19 +511,13 @@ ${first.raw}
         const shapedFallback = fallbackSummary("AI output could not be repaired into JSON.");
         const summaryString = JSON.stringify(shapedFallback);
 
-        await fetch(`${supabaseUrl}/rest/v1/ai_summaries?on_conflict=session_id,user_id`, {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            apikey: serviceKey,
-            authorization: `Bearer ${serviceKey}`,
-            prefer: "resolution=merge-duplicates,return=representation",
-          },
-          body: JSON.stringify({
-            session_id: sessionId,
-            user_id: userId,
-            summary: summaryString,
-          }),
+        await upsertAiSummary({
+          supabaseUrl,
+          serviceKey,
+          sessionId,
+          userId,
+          summaryString,
+          metrics,
         }).catch(() => {});
 
         return json({ ok: true, summary: shapedFallback, note: "Fallback summary returned" }, 200);
@@ -379,19 +528,13 @@ ${first.raw}
         const shapedFallback = fallbackSummary("AI output was invalid JSON.");
         const summaryString = JSON.stringify(shapedFallback);
 
-        await fetch(`${supabaseUrl}/rest/v1/ai_summaries?on_conflict=session_id,user_id`, {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            apikey: serviceKey,
-            authorization: `Bearer ${serviceKey}`,
-            prefer: "resolution=merge-duplicates,return=representation",
-          },
-          body: JSON.stringify({
-            session_id: sessionId,
-            user_id: userId,
-            summary: summaryString,
-          }),
+        await upsertAiSummary({
+          supabaseUrl,
+          serviceKey,
+          sessionId,
+          userId,
+          summaryString,
+          metrics,
         }).catch(() => {});
 
         return json({ ok: true, summary: shapedFallback, note: "Fallback summary returned" }, 200);
@@ -401,24 +544,18 @@ ${first.raw}
     const shaped = enforceShape(parsed.value);
     const summaryString = JSON.stringify(shaped);
 
-    // 6) Upsert into ai_summaries
-    const upsertRes = await fetch(
-      `${supabaseUrl}/rest/v1/ai_summaries?on_conflict=session_id,user_id`,
-      {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          apikey: serviceKey,
-          authorization: `Bearer ${serviceKey}`,
-          prefer: "resolution=merge-duplicates,return=representation",
-        },
-        body: JSON.stringify({ session_id: sessionId, user_id: userId, summary: summaryString }),
-      },
-    );
+    // 6) Upsert into ai_summaries (metrics-aware, safe if column missing)
+    const save = await upsertAiSummary({
+      supabaseUrl,
+      serviceKey,
+      sessionId,
+      userId,
+      summaryString,
+      metrics,
+    });
 
-    if (!upsertRes.ok) {
-      const t = await upsertRes.text().catch(() => "");
-      return json({ error: "Failed to save summary", details: t || null }, 500);
+    if (!save.ok) {
+      return json({ error: "Failed to save summary", details: (save as any).details ?? null }, 500);
     }
 
     return json({ ok: true, summary: shaped }, 200);
