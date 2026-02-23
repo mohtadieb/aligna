@@ -1,5 +1,7 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -64,7 +66,8 @@ class _ResultsPageState extends State<ResultsPage> {
 
   // ✅ AI summary state
   bool _aiBusy = false;
-  String? _aiSummary;
+  Map<String, dynamic>? _aiSummaryJson;
+  String? _aiSummaryRaw; // fallback if JSON parsing fails
 
   @override
   void initState() {
@@ -93,6 +96,9 @@ class _ResultsPageState extends State<ResultsPage> {
 
     // DB truth for Pro
     _refreshDbPro();
+
+    // Attempt to load any saved AI summary
+    _loadAiSummaryFromDb();
   }
 
   Future<void> _initRevenueCat() async {
@@ -329,6 +335,204 @@ class _ResultsPageState extends State<ResultsPage> {
   // ✅ Trust DB status (because you have triggers)
   bool get _finalReady => ((_session?['status'] as String?) == 'completed');
 
+  // --- AI summary helpers -----------------------------------------------------
+
+  String _cleanJsonishText(String s) {
+    var t = s.trim();
+    // Remove triple backtick fences
+    t = t.replaceFirst(RegExp(r'^```(?:json)?\s*', caseSensitive: false), '');
+    t = t.replaceFirst(RegExp(r'```$', caseSensitive: false), '');
+    // Remove leading "json"
+    t = t.replaceFirst(RegExp(r'^\s*json\s*', caseSensitive: false), '');
+    return t.trim();
+  }
+
+  /// Extract first {...} JSON object if model adds extra text.
+  String? _extractFirstJsonObject(String s) {
+    final t = _cleanJsonishText(s);
+    final start = t.indexOf('{');
+    if (start < 0) return null;
+
+    var depth = 0;
+    for (var i = start; i < t.length; i++) {
+      final ch = t[i];
+      if (ch == '{') depth++;
+      if (ch == '}') {
+        depth--;
+        if (depth == 0) {
+          return t.substring(start, i + 1);
+        }
+      }
+    }
+    return null; // unbalanced
+  }
+
+  Map<String, dynamic>? _tryParseSummary(dynamic summary) {
+    if (summary == null) return null;
+
+    // If function already returns a Map
+    if (summary is Map) {
+      return Map<String, dynamic>.from(summary as Map);
+    }
+
+    // If it's a JSON string
+    if (summary is String) {
+      final candidate = _extractFirstJsonObject(summary) ?? _cleanJsonishText(summary);
+      try {
+        final decoded = jsonDecode(candidate);
+        if (decoded is Map) return Map<String, dynamic>.from(decoded);
+      } catch (_) {
+        // swallow
+      }
+    }
+
+    return null;
+  }
+
+  String _formatAiSummaryForPdf(Map<String, dynamic> j) {
+    final headline = (j['headline'] ?? '').toString();
+
+    List<String> list(String key) {
+      final v = j[key];
+      if (v is List) {
+        return v.map((e) => e.toString()).where((s) => s.trim().isNotEmpty).toList();
+      }
+      return const [];
+    }
+
+    final strengths = list('strengths');
+    final risks = list('risks');
+    final prompts = list('discussion_prompts');
+    final next = list('next_steps');
+
+    final b = StringBuffer();
+    if (headline.trim().isNotEmpty) b.writeln(headline.trim());
+
+    void addSection(String title, List<String> items) {
+      if (items.isEmpty) return;
+      if (b.isNotEmpty) b.writeln();
+      b.writeln('$title:');
+      for (final s in items) {
+        b.writeln('• $s');
+      }
+    }
+
+    addSection('Strengths', strengths);
+    addSection('Risks', risks);
+    addSection('Discussion prompts', prompts);
+    addSection('Next steps', next);
+
+    return b.toString().trim();
+  }
+
+  /// ✅ Loads any previously generated summary (if exists) from ai_summaries.
+  Future<void> _loadAiSummaryFromDb() async {
+    final sb = Supabase.instance.client;
+    final uid = sb.auth.currentUser?.id;
+    if (uid == null) return;
+
+    try {
+      final row = await sb
+          .from('ai_summaries')
+          .select('summary')
+          .eq('session_id', widget.sessionId)
+          .eq('user_id', uid)
+          .maybeSingle();
+
+      final raw = row?['summary'];
+      final parsed = _tryParseSummary(raw);
+
+      if (!mounted) return;
+      setState(() {
+        _aiSummaryJson = parsed;
+        _aiSummaryRaw = parsed == null ? (raw?.toString()) : null;
+      });
+    } catch (e) {
+      debugPrint('load ai summary failed: $e');
+    }
+  }
+
+  /// ✅ Generates AI summary via Supabase Edge Function.
+  Future<void> _generateAiSummary() async {
+    if (_aiBusy) return;
+
+    if (!_finalReady) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('AI summary unlocks when final results are ready.')),
+      );
+      return;
+    }
+
+    if (!_partnerJoined) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Waiting for partner to join.')),
+      );
+      return;
+    }
+
+    // Hard gate: DB truth
+    if (!_hardPro) {
+      await _openProPaywall();
+      if (!_hardPro && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Pro is required for AI summary.')),
+        );
+      }
+      return;
+    }
+
+    setState(() => _aiBusy = true);
+
+    try {
+      final sb = Supabase.instance.client;
+
+      final res = await sb.functions.invoke(
+        'ai_summary',
+        body: {'sessionId': widget.sessionId},
+      );
+
+      if (res.status != 200) {
+        throw Exception('ai_summary failed: status=${res.status}, data=${res.data}');
+      }
+
+      final data = res.data;
+
+      // Preferred: { ok: true, summary: { ... } } OR { ok: true, summary: "<json string>" }
+      dynamic summaryCandidate;
+      if (data is Map) {
+        summaryCandidate = data['summary'];
+      }
+
+      final parsed = _tryParseSummary(summaryCandidate);
+
+      if (parsed != null) {
+        if (!mounted) return;
+        setState(() {
+          _aiSummaryJson = parsed;
+          _aiSummaryRaw = null;
+        });
+        return;
+      }
+
+      // ✅ If function didn't return summary, it may still have saved to DB.
+      await _loadAiSummaryFromDb();
+
+      if (_aiSummaryJson == null && (_aiSummaryRaw == null || _aiSummaryRaw!.trim().isEmpty)) {
+        throw Exception('No summary returned from function');
+      }
+    } catch (e) {
+      if (!mounted) return;
+      debugPrint('ai_summary FunctionException: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('AI summary failed: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _aiBusy = false);
+    }
+  }
+
+  // --- PDF export -------------------------------------------------------------
+
   Future<void> _exportFinalPdf() async {
     if (!_finalReady) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -379,61 +583,67 @@ class _ResultsPageState extends State<ResultsPage> {
     doc.addPage(
       pw.MultiPage(
         build: (context) => [
-          pw.Text('Aligna — Final Compatibility Report',
-              style: pw.TextStyle(fontSize: 20, fontWeight: pw.FontWeight.bold)),
+          pw.Text(
+            'Aligna — Final Compatibility Report',
+            style: pw.TextStyle(fontSize: 20, fontWeight: pw.FontWeight.bold),
+          ),
           pw.SizedBox(height: 12),
-
           pw.Text('Session: ${widget.sessionId}', style: const pw.TextStyle(fontSize: 10)),
           pw.SizedBox(height: 6),
           pw.Text('Answered: You $_myCount / $_totalQuestions, Partner $_partnerCount / $_totalQuestions'),
           pw.SizedBox(height: 12),
-
           pw.Text('Overall compatibility', style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold)),
           pw.SizedBox(height: 6),
           pw.Text(overall == null ? '—' : '${overall.toStringAsFixed(0)}%'),
           pw.SizedBox(height: 12),
-
           pw.Text('Quick insight', style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold)),
           pw.SizedBox(height: 6),
           pw.Text('Strong alignment: ${listOrDash(buckets.strong)}'),
           pw.Text('Moderate alignment: ${listOrDash(buckets.moderate)}'),
           pw.Text('Major differences: ${listOrDash(buckets.major)}'),
-
           pw.SizedBox(height: 14),
           pw.Divider(),
           pw.SizedBox(height: 10),
-
           pw.Text('Module scores', style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold)),
           pw.SizedBox(height: 8),
           ...moduleLines.map((l) => pw.Text('• $l')),
-
           pw.SizedBox(height: 14),
           pw.Divider(),
           pw.SizedBox(height: 10),
-
           pw.Text('Top mismatches', style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold)),
           pw.SizedBox(height: 8),
           if (mismatches.isEmpty)
             pw.Text('—')
           else
-            ...mismatches.map((e) => pw.Column(
-              crossAxisAlignment: pw.CrossAxisAlignment.start,
-              children: [
-                pw.Text('${e.moduleTitle} — severity ${e.severity.toStringAsFixed(1)}',
-                    style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
-                pw.Text(e.questionText),
-                pw.Text('You: ${e.myAnswer}'),
-                pw.Text('Partner: ${e.partnerAnswer}'),
-                pw.SizedBox(height: 8),
-              ],
-            )),
-          if (_aiSummary != null) ...[
+            ...mismatches.map(
+                  (e) => pw.Column(
+                crossAxisAlignment: pw.CrossAxisAlignment.start,
+                children: [
+                  pw.Text(
+                    '${e.moduleTitle} — severity ${e.severity.toStringAsFixed(1)}',
+                    style: pw.TextStyle(fontWeight: pw.FontWeight.bold),
+                  ),
+                  pw.Text(e.questionText),
+                  pw.Text('You: ${e.myAnswer}'),
+                  pw.Text('Partner: ${e.partnerAnswer}'),
+                  pw.SizedBox(height: 8),
+                ],
+              ),
+            ),
+          if (_aiSummaryJson != null) ...[
             pw.SizedBox(height: 14),
             pw.Divider(),
             pw.SizedBox(height: 10),
             pw.Text('AI Summary', style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold)),
             pw.SizedBox(height: 6),
-            pw.Text(_aiSummary!),
+            pw.Text(_formatAiSummaryForPdf(_aiSummaryJson!)),
+          ] else if (_aiSummaryRaw != null && _aiSummaryRaw!.trim().isNotEmpty) ...[
+            pw.SizedBox(height: 14),
+            pw.Divider(),
+            pw.SizedBox(height: 10),
+            pw.Text('AI Summary', style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold)),
+            pw.SizedBox(height: 6),
+            pw.Text(_aiSummaryRaw!.trim()),
           ],
         ],
       ),
@@ -452,103 +662,7 @@ class _ResultsPageState extends State<ResultsPage> {
     }
   }
 
-  /// ✅ Loads any previously generated summary (if exists) from ai_summaries.
-  Future<void> _loadAiSummaryFromDb() async {
-    final sb = Supabase.instance.client;
-    final uid = sb.auth.currentUser?.id;
-    if (uid == null) return;
-
-    try {
-      final row = await sb
-          .from('ai_summaries')
-          .select('summary')
-          .eq('session_id', widget.sessionId)
-          .eq('user_id', uid)
-          .maybeSingle();
-
-      final s = row?['summary'] as String?;
-      if (!mounted) return;
-      setState(() => _aiSummary = s);
-    } catch (e) {
-      debugPrint('load ai summary failed: $e');
-    }
-  }
-
-  /// ✅ Generates AI summary via Supabase Edge Function (Option A: test from app).
-  Future<void> _generateAiSummary() async {
-    if (_aiBusy) return;
-
-    if (!_finalReady) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('AI summary unlocks when final results are ready.')),
-      );
-      return;
-    }
-
-    if (!_partnerJoined) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Waiting for partner to join.')),
-      );
-      return;
-    }
-
-    // Hard gate: DB truth
-    if (!_hardPro) {
-      await _openProPaywall();
-      if (!_hardPro && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Pro is required for AI summary.')),
-        );
-      }
-      return;
-    }
-
-    setState(() => _aiBusy = true);
-
-    final sb = Supabase.instance.client;
-
-    try {
-      final res = await sb.functions.invoke(
-        'ai_summary',
-        body: {'sessionId': widget.sessionId},
-      );
-
-      debugPrint('ai_summary status=${res.status}');
-      debugPrint('ai_summary data=${res.data}');
-
-      // If the function returned an error payload, surface it
-      final data = res.data;
-      if (data is Map && data['error'] != null) {
-        final msg = '${data['error']}';
-        final details = data['details'] != null ? ' — ${data['details']}' : '';
-        throw Exception('$msg$details');
-      }
-
-      // Most likely: it saves to ai_summaries; now load it
-      await _loadAiSummaryFromDb();
-
-      if (!mounted) return;
-      if ((_aiSummary ?? '').trim().isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('AI summary not found after generation.')),
-        );
-      }
-    } on FunctionException catch (e) {
-      debugPrint('ai_summary FunctionException: status=${e.status}, details=${e.details}');
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('AI summary failed (${e.status}): ${e.details ?? e.toString()}')),
-      );
-    } catch (e) {
-      debugPrint('ai_summary error: $e');
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('AI summary failed: $e')),
-      );
-    } finally {
-      if (mounted) setState(() => _aiBusy = false);
-    }
-  }
+  // --- scoring ----------------------------------------------------------------
 
   double? _computeModuleScore(
       List<Map<String, dynamic>> questions,
@@ -1081,7 +1195,7 @@ class _ResultsPageState extends State<ResultsPage> {
                     ],
                   )
                 else ...[
-                    if (_aiSummary == null)
+                    if (_aiSummaryJson == null && (_aiSummaryRaw == null || _aiSummaryRaw!.trim().isEmpty))
                       SizedBox(
                         width: double.infinity,
                         height: 44,
@@ -1098,16 +1212,36 @@ class _ResultsPageState extends State<ResultsPage> {
                           borderRadius: BorderRadius.circular(14),
                           border: Border.all(color: Colors.black12),
                         ),
-                        child: Text(_aiSummary!, style: const TextStyle(color: Colors.black87)),
+                        child: _aiSummaryJson != null
+                            ? _AiSummaryView(json: _aiSummaryJson!)
+                            : Text(_aiSummaryRaw ?? '', style: const TextStyle(color: Colors.black87)),
                       ),
                       const SizedBox(height: 8),
-                      Align(
-                        alignment: Alignment.centerRight,
-                        child: TextButton.icon(
-                          onPressed: _aiBusy ? null : _loadAiSummaryFromDb,
-                          icon: const Icon(Icons.refresh, size: 18),
-                          label: const Text('Refresh'),
-                        ),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        children: [
+                          TextButton.icon(
+                            onPressed: _aiBusy ? null : _loadAiSummaryFromDb,
+                            icon: const Icon(Icons.refresh, size: 18),
+                            label: const Text('Refresh'),
+                          ),
+                          const SizedBox(width: 6),
+                          TextButton.icon(
+                            onPressed: () async {
+                              final text = _aiSummaryJson != null
+                                  ? const JsonEncoder.withIndent('  ').convert(_aiSummaryJson)
+                                  : (_aiSummaryRaw ?? '');
+                              if (text.trim().isEmpty) return;
+                              await Clipboard.setData(ClipboardData(text: text));
+                              if (!mounted) return;
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(content: Text('Summary copied')),
+                              );
+                            },
+                            icon: const Icon(Icons.copy, size: 18),
+                            label: const Text('Copy'),
+                          ),
+                        ],
                       ),
                     ],
                   ],
@@ -1185,14 +1319,13 @@ class _ResultsPageState extends State<ResultsPage> {
               width: double.infinity,
               child: ElevatedButton(
                 onPressed: () async {
-                  // optional: refresh DB Pro right before exporting
                   await _refreshDbPro();
                   if (!mounted) return;
                   await _exportFinalPdf();
                 },
-                child: Text(!_dbProReady
-                    ? 'Checking…'
-                    : (_hardPro ? 'Export Final Report (PDF)' : 'Unlock Pro to Export')),
+                child: Text(
+                  !_dbProReady ? 'Checking…' : (_hardPro ? 'Export Final Report (PDF)' : 'Unlock Pro to Export'),
+                ),
               ),
             ),
             const SizedBox(height: 8),
@@ -1207,6 +1340,60 @@ class _ResultsPageState extends State<ResultsPage> {
             ),
         ],
       ),
+    );
+  }
+}
+
+class _AiSummaryView extends StatelessWidget {
+  final Map<String, dynamic> json;
+  const _AiSummaryView({required this.json});
+
+  List<String> _list(String key) {
+    final v = json[key];
+    if (v is List) {
+      return v.map((e) => e.toString()).where((s) => s.trim().isNotEmpty).toList();
+    }
+    return const [];
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final headline = (json['headline'] ?? '').toString();
+    final strengths = _list('strengths');
+    final risks = _list('risks');
+    final prompts = _list('discussion_prompts');
+    final next = _list('next_steps');
+
+    Widget section(String title, List<String> items) {
+      if (items.isEmpty) return const SizedBox.shrink();
+      return Padding(
+        padding: const EdgeInsets.only(top: 10),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(title, style: const TextStyle(fontWeight: FontWeight.w800)),
+            const SizedBox(height: 6),
+            ...items.map(
+                  (s) => Padding(
+                padding: const EdgeInsets.only(bottom: 4),
+                child: Text('• $s', style: const TextStyle(color: Colors.black87)),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (headline.trim().isNotEmpty)
+          Text(headline, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w900)),
+        section('Strengths', strengths),
+        section('Risks', risks),
+        section('Discussion prompts', prompts),
+        section('Next steps', next),
+      ],
     );
   }
 }
