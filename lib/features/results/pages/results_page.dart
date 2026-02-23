@@ -12,6 +12,13 @@ import '../../../services/supabase/results_service.dart';
 // ✅ RevenueCat source of truth (same as Home)
 import '../../../services/revenuecat/revenuecat_service.dart';
 
+// ✅ PDF export (add to pubspec.yaml)
+// dependencies:
+//   pdf: ^3.10.8
+//   printing: ^5.12.0
+import 'package:pdf/widgets.dart' as pw;
+import 'package:printing/printing.dart';
+
 class ResultsPage extends StatefulWidget {
   final String sessionId;
   const ResultsPage({super.key, required this.sessionId});
@@ -46,14 +53,62 @@ class _ResultsPageState extends State<ResultsPage> {
   // only re-fetch session + responses.
   bool _contentLoaded = false;
 
+  // ✅ Keep Pro status reactive without spamming refresh calls
+  late final VoidCallback _proListener;
+
+  bool get _isPro => RevenueCatService.instance.isPro.value;
+
+  // ✅ Hard gate: DB truth (prevents spoofing)
+  bool _dbPro = false;
+  bool _dbProReady = false;
+
+  // ✅ AI summary state
+  bool _aiBusy = false;
+  String? _aiSummary;
+
   @override
   void initState() {
     super.initState();
+
+    _proListener = () async {
+      if (!mounted) return;
+
+      // ✅ Avoid setState during build
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) setState(() {});
+      });
+
+      // Refresh DB truth too
+      await _refreshDbPro();
+    };
+    RevenueCatService.instance.isPro.addListener(_proListener);
+
+    // ✅ Configure RC AFTER first frame (prevents notifier changes during build)
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _initRevenueCat();
+    });
+
+    // Load page data + realtime
     _load().then((_) => _setupRealtime());
+
+    // DB truth for Pro
+    _refreshDbPro();
+  }
+
+  Future<void> _initRevenueCat() async {
+    try {
+      await RevenueCatService.instance.configureIfNeeded();
+      await RevenueCatService.instance.refresh();
+      if (mounted) setState(() {});
+    } catch (_) {
+      // keep silent
+    }
   }
 
   @override
   void dispose() {
+    RevenueCatService.instance.isPro.removeListener(_proListener);
+
     _reloadDebounce?.cancel();
     final sb = Supabase.instance.client;
     if (_responsesChannel != null) sb.removeChannel(_responsesChannel!);
@@ -73,8 +128,6 @@ class _ResultsPageState extends State<ResultsPage> {
     return myId == createdBy ? partnerId : createdBy;
   }
 
-  bool get _isPro => RevenueCatService.instance.isPro.value;
-
   Future<void> _openProPaywall() async {
     final changed = await Navigator.push<bool>(
       context,
@@ -82,20 +135,61 @@ class _ResultsPageState extends State<ResultsPage> {
     );
 
     if (changed == true) {
-      await RevenueCatService.instance.refresh();
+      try {
+        await RevenueCatService.instance.refresh();
+      } catch (_) {}
+      await _refreshDbPro();
       if (mounted) setState(() {});
     }
   }
+
+  /// ✅ DB truth: checks purchases table.
+  /// Assumes you store the lifetime unlock as:
+  /// purchases.type = 'lifetime_unlock'
+  Future<void> _refreshDbPro() async {
+    final sb = Supabase.instance.client;
+    final uid = sb.auth.currentUser?.id;
+    if (uid == null) {
+      if (!mounted) return;
+      setState(() {
+        _dbPro = false;
+        _dbProReady = true;
+      });
+      return;
+    }
+
+    try {
+      final res = await sb
+          .from('purchases')
+          .select('id')
+          .eq('user_id', uid)
+          .eq('type', 'lifetime_unlock')
+          .limit(1);
+
+      final has = (res as List).isNotEmpty;
+
+      if (!mounted) return;
+      setState(() {
+        _dbPro = has;
+        _dbProReady = true;
+      });
+    } catch (_) {
+      // If DB check fails, don't block UI forever; treat as not-pro for hard gate.
+      if (!mounted) return;
+      setState(() {
+        _dbPro = false;
+        _dbProReady = true;
+      });
+    }
+  }
+
+  bool get _hardPro => _dbProReady && _dbPro;
 
   Future<void> _load({bool silent = false}) async {
     if (!silent) setState(() => _loading = true);
 
     final sb = Supabase.instance.client;
     final myId = sb.auth.currentUser!.id;
-
-    // Keep RC in sync (safe call)
-    await RevenueCatService.instance.configureIfNeeded();
-    await RevenueCatService.instance.refresh();
 
     // Always fetch session + responses (dynamic)
     final session = await _sessionService.getSession(widget.sessionId);
@@ -235,252 +329,225 @@ class _ResultsPageState extends State<ResultsPage> {
   // ✅ Trust DB status (because you have triggers)
   bool get _finalReady => ((_session?['status'] as String?) == 'completed');
 
-  @override
-  Widget build(BuildContext context) {
-    if (_loading) {
-      return const Scaffold(
-        body: Center(child: CircularProgressIndicator()),
+  Future<void> _exportFinalPdf() async {
+    if (!_finalReady) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Final results are not ready yet.')),
       );
+      return;
+    }
+
+    // Hard gate: DB truth
+    if (!_hardPro) {
+      await _openProPaywall();
+      // re-check
+      if (!_hardPro) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Pro is required to export the PDF.')),
+        );
+      }
+      return;
+    }
+
+    if (!_partnerJoined) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Waiting for partner to join.')),
+      );
+      return;
     }
 
     final overall = _computeOverallScore();
     final buckets = _alignmentBuckets();
+
+    final doc = pw.Document();
+
     String listOrDash(List<String> items) => items.isEmpty ? '—' : items.join(', ');
 
-    final mismatchLimit = _isPro ? 20 : 5;
+    final moduleLines = <String>[];
+    for (final m in _modules) {
+      final moduleId = m['id'] as String;
+      final title = m['title'] as String;
+      final qs = _questionsByModule[moduleId] ?? const [];
+      final score = _computeModuleScore(qs, _me, _partner);
+      final label = score == null ? '—' : '${score.toStringAsFixed(0)}%';
+      moduleLines.add('$title: $label');
+    }
 
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(_finalReady ? 'Results (Final)' : 'Results (Live)'),
-        actions: [
-          IconButton(
-            onPressed: () => _load(),
-            icon: const Icon(Icons.refresh),
-            tooltip: 'Refresh',
-          ),
-        ],
-      ),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          _StatusCard(
-            partnerJoined: _partnerJoined,
-            total: _totalQuestions,
-            myCount: _myCount,
-            partnerCount: _partnerCount,
-            finalReady: _finalReady,
-          ),
-          const SizedBox(height: 16),
+    final mismatches = _topMismatchEntries(limit: 20);
 
-          // ✅ Overall + Insight
-          Container(
-            padding: const EdgeInsets.all(14),
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: Colors.black12),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+    doc.addPage(
+      pw.MultiPage(
+        build: (context) => [
+          pw.Text('Aligna — Final Compatibility Report',
+              style: pw.TextStyle(fontSize: 20, fontWeight: pw.FontWeight.bold)),
+          pw.SizedBox(height: 12),
+
+          pw.Text('Session: ${widget.sessionId}', style: const pw.TextStyle(fontSize: 10)),
+          pw.SizedBox(height: 6),
+          pw.Text('Answered: You $_myCount / $_totalQuestions, Partner $_partnerCount / $_totalQuestions'),
+          pw.SizedBox(height: 12),
+
+          pw.Text('Overall compatibility', style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold)),
+          pw.SizedBox(height: 6),
+          pw.Text(overall == null ? '—' : '${overall.toStringAsFixed(0)}%'),
+          pw.SizedBox(height: 12),
+
+          pw.Text('Quick insight', style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold)),
+          pw.SizedBox(height: 6),
+          pw.Text('Strong alignment: ${listOrDash(buckets.strong)}'),
+          pw.Text('Moderate alignment: ${listOrDash(buckets.moderate)}'),
+          pw.Text('Major differences: ${listOrDash(buckets.major)}'),
+
+          pw.SizedBox(height: 14),
+          pw.Divider(),
+          pw.SizedBox(height: 10),
+
+          pw.Text('Module scores', style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold)),
+          pw.SizedBox(height: 8),
+          ...moduleLines.map((l) => pw.Text('• $l')),
+
+          pw.SizedBox(height: 14),
+          pw.Divider(),
+          pw.SizedBox(height: 10),
+
+          pw.Text('Top mismatches', style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold)),
+          pw.SizedBox(height: 8),
+          if (mismatches.isEmpty)
+            pw.Text('—')
+          else
+            ...mismatches.map((e) => pw.Column(
+              crossAxisAlignment: pw.CrossAxisAlignment.start,
               children: [
-                const Text(
-                  'Overall compatibility',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
-                ),
-                const SizedBox(height: 10),
-                if (!_partnerJoined)
-                  const Text(
-                    'Waiting for partner to join to calculate compatibility.',
-                    style: TextStyle(color: Colors.black54),
-                  )
-                else if (overall == null)
-                  const Text(
-                    'Not enough shared answers yet.',
-                    style: TextStyle(color: Colors.black54),
-                  )
-                else
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          '${overall.toStringAsFixed(0)}%',
-                          style: const TextStyle(
-                            fontSize: 28,
-                            fontWeight: FontWeight.w900,
-                          ),
-                        ),
-                      ),
-                      SizedBox(
-                        width: 120,
-                        child: ClipRRect(
-                          borderRadius: BorderRadius.circular(999),
-                          child: LinearProgressIndicator(
-                            value: (overall / 100).clamp(0, 1),
-                            minHeight: 10,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                const SizedBox(height: 14),
-                const Divider(height: 1),
-                const SizedBox(height: 14),
-
-                Row(
-                  children: [
-                    const Expanded(
-                      child: Text(
-                        'Quick insight',
-                        style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800),
-                      ),
-                    ),
-                    if (!_isPro)
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(999),
-                          border: Border.all(color: Colors.black12),
-                        ),
-                        child: const Text(
-                          'Pro',
-                          style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
-                        ),
-                      ),
-                  ],
-                ),
-                const SizedBox(height: 10),
-
-                if (!_partnerJoined || overall == null)
-                  const Text(
-                    'Answer more questions together to unlock insights.',
-                    style: TextStyle(color: Colors.black54),
-                  )
-                else if (_isPro) ...[
-                  Text('🟢 Strong alignment in: ${listOrDash(buckets.strong)}'),
-                  const SizedBox(height: 6),
-                  Text('🟡 Moderate alignment in: ${listOrDash(buckets.moderate)}'),
-                  const SizedBox(height: 6),
-                  Text('🔴 Major differences in: ${listOrDash(buckets.major)}'),
-                ] else ...[
-                  const Text(
-                    'Unlock Pro to see deep insights across modules.',
-                    style: TextStyle(color: Colors.black54),
-                  ),
-                  const SizedBox(height: 12),
-                  SizedBox(
-                    width: double.infinity,
-                    height: 44,
-                    child: ElevatedButton(
-                      onPressed: _openProPaywall,
-                      child: const Text('Unlock Pro'),
-                    ),
-                  ),
-                ],
+                pw.Text('${e.moduleTitle} — severity ${e.severity.toStringAsFixed(1)}',
+                    style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
+                pw.Text(e.questionText),
+                pw.Text('You: ${e.myAnswer}'),
+                pw.Text('Partner: ${e.partnerAnswer}'),
+                pw.SizedBox(height: 8),
               ],
-            ),
-          ),
-
-          const SizedBox(height: 16),
-          const Text(
-            'Module scores',
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
-          ),
-          const SizedBox(height: 10),
-          ..._modules.map((m) {
-            final moduleId = m['id'] as String;
-            final title = m['title'] as String;
-            final qs = _questionsByModule[moduleId] ?? const [];
-
-            final score = _computeModuleScore(qs, _me, _partner);
-            final label = score == null ? '—' : '${score.toStringAsFixed(0)}%';
-
-            return Padding(
-              padding: const EdgeInsets.only(bottom: 12),
-              child: _ModuleScoreTile(
-                title: title,
-                scoreLabel: label,
-                progress: score == null ? null : (score / 100.0),
-                subtitle: _partnerJoined
-                    ? (_finalReady ? 'Final' : 'Live (updates automatically)')
-                    : 'Waiting for partner to join',
-              ),
-            );
-          }),
-
-          const SizedBox(height: 18),
-          Row(
-            children: [
-              const Expanded(
-                child: Text(
-                  'Top mismatches',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
-                ),
-              ),
-              if (!_isPro)
-                TextButton(
-                  onPressed: _openProPaywall,
-                  child: const Text('Unlock full'),
-                ),
-            ],
-          ),
-          const SizedBox(height: 10),
-
-          if (!_partnerJoined)
-            const _EmptyHint(
-              text: 'Partner hasn’t joined yet. Mismatches will appear once both answer.',
-            )
-          else ...[
-            ..._buildTopMismatches(limit: mismatchLimit),
-            if (!_isPro)
-              Padding(
-                padding: const EdgeInsets.only(top: 8),
-                child: Text(
-                  'Showing $mismatchLimit mismatches. Unlock Pro to see more.',
-                  style: const TextStyle(color: Colors.black54),
-                ),
-              ),
+            )),
+          if (_aiSummary != null) ...[
+            pw.SizedBox(height: 14),
+            pw.Divider(),
+            pw.SizedBox(height: 10),
+            pw.Text('AI Summary', style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold)),
+            pw.SizedBox(height: 6),
+            pw.Text(_aiSummary!),
           ],
-
-          const SizedBox(height: 24),
-
-          // Export gating
-          if (_finalReady) ...[
-            if (_isPro)
-              SizedBox(
-                height: 48,
-                child: ElevatedButton(
-                  onPressed: () {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('PDF export comes in phase 2 ✅')),
-                    );
-                  },
-                  child: const Text('Export Final Report (Soon)'),
-                ),
-              )
-            else
-              Column(
-                children: [
-                  SizedBox(
-                    height: 48,
-                    width: double.infinity,
-                    child: ElevatedButton(
-                      onPressed: _openProPaywall,
-                      child: const Text('Unlock Pro to Export'),
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  const Text(
-                    'Export is a Pro feature.',
-                    style: TextStyle(color: Colors.black54),
-                  ),
-                ],
-              ),
-          ] else
-            const _EmptyHint(
-              text: 'Live results are shown now. Final results unlock when both finish all questions.',
-            ),
         ],
       ),
     );
+
+    try {
+      await Printing.layoutPdf(
+        onLayout: (_) async => doc.save(),
+        name: 'Aligna_Report_${widget.sessionId}.pdf',
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('PDF export failed: $e')),
+      );
+    }
+  }
+
+  /// ✅ Loads any previously generated summary (if exists) from ai_summaries.
+  Future<void> _loadAiSummaryFromDb() async {
+    final sb = Supabase.instance.client;
+    final uid = sb.auth.currentUser?.id;
+    if (uid == null) return;
+
+    try {
+      final row = await sb
+          .from('ai_summaries')
+          .select('summary')
+          .eq('session_id', widget.sessionId)
+          .eq('user_id', uid)
+          .maybeSingle();
+
+      final s = row?['summary'] as String?;
+      if (!mounted) return;
+      setState(() => _aiSummary = s);
+    } catch (e) {
+      debugPrint('load ai summary failed: $e');
+    }
+  }
+
+  /// ✅ Generates AI summary via Supabase Edge Function (Option A: test from app).
+  Future<void> _generateAiSummary() async {
+    if (_aiBusy) return;
+
+    if (!_finalReady) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('AI summary unlocks when final results are ready.')),
+      );
+      return;
+    }
+
+    if (!_partnerJoined) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Waiting for partner to join.')),
+      );
+      return;
+    }
+
+    // Hard gate: DB truth
+    if (!_hardPro) {
+      await _openProPaywall();
+      if (!_hardPro && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Pro is required for AI summary.')),
+        );
+      }
+      return;
+    }
+
+    setState(() => _aiBusy = true);
+
+    final sb = Supabase.instance.client;
+
+    try {
+      final res = await sb.functions.invoke(
+        'ai_summary',
+        body: {'sessionId': widget.sessionId},
+      );
+
+      debugPrint('ai_summary status=${res.status}');
+      debugPrint('ai_summary data=${res.data}');
+
+      // If the function returned an error payload, surface it
+      final data = res.data;
+      if (data is Map && data['error'] != null) {
+        final msg = '${data['error']}';
+        final details = data['details'] != null ? ' — ${data['details']}' : '';
+        throw Exception('$msg$details');
+      }
+
+      // Most likely: it saves to ai_summaries; now load it
+      await _loadAiSummaryFromDb();
+
+      if (!mounted) return;
+      if ((_aiSummary ?? '').trim().isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('AI summary not found after generation.')),
+        );
+      }
+    } on FunctionException catch (e) {
+      debugPrint('ai_summary FunctionException: status=${e.status}, details=${e.details}');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('AI summary failed (${e.status}): ${e.details ?? e.toString()}')),
+      );
+    } catch (e) {
+      debugPrint('ai_summary error: $e');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('AI summary failed: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _aiBusy = false);
+    }
   }
 
   double? _computeModuleScore(
@@ -641,8 +708,10 @@ class _ResultsPageState extends State<ResultsPage> {
     }
   }
 
-  List<Widget> _buildTopMismatches({int limit = 10}) {
+  List<_MismatchEntry> _topMismatchEntries({int limit = 10}) {
     final entries = <_MismatchEntry>[];
+
+    if (!_partnerJoined) return entries;
 
     for (final m in _modules) {
       final moduleId = m['id'] as String;
@@ -672,7 +741,11 @@ class _ResultsPageState extends State<ResultsPage> {
     }
 
     entries.sort((x, y) => y.severity.compareTo(x.severity));
-    final top = entries.take(min(limit, entries.length)).toList();
+    return entries.take(min(limit, entries.length)).toList();
+  }
+
+  List<Widget> _buildTopMismatches({int limit = 10}) {
+    final top = _topMismatchEntries(limit: limit);
 
     if (top.isEmpty) {
       return const [
@@ -812,6 +885,330 @@ class _ResultsPageState extends State<ResultsPage> {
       'What are your boundaries around privacy, friends, and communication?',
     ],
   };
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) {
+      return const Scaffold(
+        body: Center(child: CircularProgressIndicator()),
+      );
+    }
+
+    final overall = _computeOverallScore();
+    final buckets = _alignmentBuckets();
+    String listOrDash(List<String> items) => items.isEmpty ? '—' : items.join(', ');
+
+    final mismatchLimit = _isPro ? 20 : 5;
+
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(_finalReady ? 'Results (Final)' : 'Results (Live)'),
+        actions: [
+          IconButton(
+            onPressed: () => _load(),
+            icon: const Icon(Icons.refresh),
+            tooltip: 'Refresh',
+          ),
+        ],
+      ),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          _StatusCard(
+            partnerJoined: _partnerJoined,
+            total: _totalQuestions,
+            myCount: _myCount,
+            partnerCount: _partnerCount,
+            finalReady: _finalReady,
+          ),
+          const SizedBox(height: 16),
+
+          // ✅ Overall + Insight + AI summary
+          Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: Colors.black12),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Overall compatibility',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+                ),
+                const SizedBox(height: 10),
+                if (!_partnerJoined)
+                  const Text(
+                    'Waiting for partner to join to calculate compatibility.',
+                    style: TextStyle(color: Colors.black54),
+                  )
+                else if (overall == null)
+                  const Text(
+                    'Not enough shared answers yet.',
+                    style: TextStyle(color: Colors.black54),
+                  )
+                else
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          '${overall.toStringAsFixed(0)}%',
+                          style: const TextStyle(
+                            fontSize: 28,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                      ),
+                      SizedBox(
+                        width: 120,
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(999),
+                          child: LinearProgressIndicator(
+                            value: (overall / 100).clamp(0, 1),
+                            minHeight: 10,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                const SizedBox(height: 14),
+                const Divider(height: 1),
+                const SizedBox(height: 14),
+
+                Row(
+                  children: [
+                    const Expanded(
+                      child: Text(
+                        'Quick insight',
+                        style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800),
+                      ),
+                    ),
+                    if (!_isPro)
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(999),
+                          border: Border.all(color: Colors.black12),
+                        ),
+                        child: const Text(
+                          'Pro',
+                          style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
+                        ),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+
+                if (!_partnerJoined || overall == null)
+                  const Text(
+                    'Answer more questions together to unlock insights.',
+                    style: TextStyle(color: Colors.black54),
+                  )
+                else if (_isPro) ...[
+                  Text('🟢 Strong alignment in: ${listOrDash(buckets.strong)}'),
+                  const SizedBox(height: 6),
+                  Text('🟡 Moderate alignment in: ${listOrDash(buckets.moderate)}'),
+                  const SizedBox(height: 6),
+                  Text('🔴 Major differences in: ${listOrDash(buckets.major)}'),
+                ] else ...[
+                  const Text(
+                    'Unlock Pro to see deep insights across modules.',
+                    style: TextStyle(color: Colors.black54),
+                  ),
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    width: double.infinity,
+                    height: 44,
+                    child: ElevatedButton(
+                      onPressed: _openProPaywall,
+                      child: const Text('Unlock Pro'),
+                    ),
+                  ),
+                ],
+
+                const SizedBox(height: 14),
+                const Divider(height: 1),
+                const SizedBox(height: 14),
+
+                // ✅ AI Summary block (Pro + Final)
+                Row(
+                  children: [
+                    const Expanded(
+                      child: Text(
+                        'AI Summary',
+                        style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800),
+                      ),
+                    ),
+                    if (!_isPro)
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(999),
+                          border: Border.all(color: Colors.black12),
+                        ),
+                        child: const Text(
+                          'Pro',
+                          style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
+                        ),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+
+                if (!_finalReady)
+                  const Text(
+                    'AI summary unlocks when final results are ready.',
+                    style: TextStyle(color: Colors.black54),
+                  )
+                else if (!_isPro)
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Unlock Pro to generate an AI summary of your compatibility.',
+                        style: TextStyle(color: Colors.black54),
+                      ),
+                      const SizedBox(height: 12),
+                      SizedBox(
+                        width: double.infinity,
+                        height: 44,
+                        child: ElevatedButton(
+                          onPressed: _openProPaywall,
+                          child: const Text('Unlock Pro'),
+                        ),
+                      ),
+                    ],
+                  )
+                else ...[
+                    if (_aiSummary == null)
+                      SizedBox(
+                        width: double.infinity,
+                        height: 44,
+                        child: ElevatedButton(
+                          onPressed: _aiBusy ? null : _generateAiSummary,
+                          child: Text(_aiBusy ? 'Generating…' : 'Generate summary'),
+                        ),
+                      )
+                    else ...[
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(color: Colors.black12),
+                        ),
+                        child: Text(_aiSummary!, style: const TextStyle(color: Colors.black87)),
+                      ),
+                      const SizedBox(height: 8),
+                      Align(
+                        alignment: Alignment.centerRight,
+                        child: TextButton.icon(
+                          onPressed: _aiBusy ? null : _loadAiSummaryFromDb,
+                          icon: const Icon(Icons.refresh, size: 18),
+                          label: const Text('Refresh'),
+                        ),
+                      ),
+                    ],
+                  ],
+              ],
+            ),
+          ),
+
+          const SizedBox(height: 16),
+          const Text(
+            'Module scores',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+          ),
+          const SizedBox(height: 10),
+          ..._modules.map((m) {
+            final moduleId = m['id'] as String;
+            final title = m['title'] as String;
+            final qs = _questionsByModule[moduleId] ?? const [];
+
+            final score = _computeModuleScore(qs, _me, _partner);
+            final label = score == null ? '—' : '${score.toStringAsFixed(0)}%';
+
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: _ModuleScoreTile(
+                title: title,
+                scoreLabel: label,
+                progress: score == null ? null : (score / 100.0),
+                subtitle: _partnerJoined
+                    ? (_finalReady ? 'Final' : 'Live (updates automatically)')
+                    : 'Waiting for partner to join',
+              ),
+            );
+          }),
+
+          const SizedBox(height: 18),
+          Row(
+            children: [
+              const Expanded(
+                child: Text(
+                  'Top mismatches',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+                ),
+              ),
+              if (!_isPro)
+                TextButton(
+                  onPressed: _openProPaywall,
+                  child: const Text('Unlock full'),
+                ),
+            ],
+          ),
+          const SizedBox(height: 10),
+
+          if (!_partnerJoined)
+            const _EmptyHint(
+              text: 'Partner hasn’t joined yet. Mismatches will appear once both answer.',
+            )
+          else ...[
+            ..._buildTopMismatches(limit: mismatchLimit),
+            if (!_isPro)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Text(
+                  'Showing $mismatchLimit mismatches. Unlock Pro to see more.',
+                  style: const TextStyle(color: Colors.black54),
+                ),
+              ),
+          ],
+
+          const SizedBox(height: 24),
+
+          // ✅ Export PDF (real functionality)
+          if (_finalReady) ...[
+            SizedBox(
+              height: 48,
+              width: double.infinity,
+              child: ElevatedButton(
+                onPressed: () async {
+                  // optional: refresh DB Pro right before exporting
+                  await _refreshDbPro();
+                  if (!mounted) return;
+                  await _exportFinalPdf();
+                },
+                child: Text(!_dbProReady
+                    ? 'Checking…'
+                    : (_hardPro ? 'Export Final Report (PDF)' : 'Unlock Pro to Export')),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              _hardPro ? 'Exports your final results as a PDF.' : 'Export is a Pro feature.',
+              style: const TextStyle(color: Colors.black54),
+              textAlign: TextAlign.center,
+            ),
+          ] else
+            const _EmptyHint(
+              text: 'Live results are shown now. Final results unlock when both finish all questions.',
+            ),
+        ],
+      ),
+    );
+  }
 }
 
 class _StatusCard extends StatelessWidget {

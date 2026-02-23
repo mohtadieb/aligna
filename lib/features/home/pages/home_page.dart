@@ -39,14 +39,22 @@ class _HomePageState extends State<HomePage> {
 
     _listenToAuthChanges();
 
-    // Only load/setup if already logged in
-    if (sb.auth.currentUser != null) {
-      _loadMySessions(showLoading: true);
-      _setupRealtime();
-    } else {
-      _loading = false;
-      _sessions = [];
-    }
+    // ✅ Cold start: do ONE unified RC sync + load content if logged in
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      await RevenueCatService.instance.handleAuthUserChanged();
+
+      if (!mounted) return;
+
+      if (sb.auth.currentUser != null) {
+        await _loadMySessions(showLoading: true);
+        _setupRealtime();
+      } else {
+        setState(() {
+          _loading = false;
+          _sessions = [];
+        });
+      }
+    });
   }
 
   @override
@@ -61,7 +69,10 @@ class _HomePageState extends State<HomePage> {
     _authSub = sb.auth.onAuthStateChange.listen((event) async {
       final user = sb.auth.currentUser;
 
-      // If logged out (or session expired), stop realtime and clear UI
+      // ✅ Always let one method decide what to do (login vs logout)
+      await RevenueCatService.instance.handleAuthUserChanged();
+
+      // Logged out (or session expired): stop realtime + clear UI
       if (user == null) {
         _reloadDebounce?.cancel();
         _stopRealtime();
@@ -74,13 +85,11 @@ class _HomePageState extends State<HomePage> {
         return;
       }
 
-      // If logged in (or refreshed), ensure realtime is running + reload list
+      // Logged in (or refreshed): ensure realtime + reload list
       _setupRealtime();
-      _loadMySessions(showLoading: true);
+      await _loadMySessions(showLoading: true);
 
-      // ✅ Keep RevenueCat in sync (safe even if already configured)
-      await RevenueCatService.instance.configureIfNeeded();
-      await RevenueCatService.instance.refresh();
+      if (mounted) setState(() {});
     });
   }
 
@@ -92,10 +101,7 @@ class _HomePageState extends State<HomePage> {
   }
 
   void _setupRealtime() {
-    // Don’t subscribe if logged out
     if (sb.auth.currentUser == null) return;
-
-    // Already subscribed
     if (_channel != null) return;
 
     _channel = sb.channel('realtime:pair_sessions_home');
@@ -114,21 +120,18 @@ class _HomePageState extends State<HomePage> {
 
         if (newRow == null || oldRow == null) return;
 
-        // Only react to rows that belong to me (either as creator or partner)
         final newCreatedBy = newRow['created_by'] as String?;
         final newPartnerId = newRow['partner_id'] as String?;
         final oldCreatedBy = oldRow['created_by'] as String?;
         final oldPartnerId = oldRow['partner_id'] as String?;
 
-        final belongsToMe =
-            (newCreatedBy == uid) ||
-                (newPartnerId == uid) ||
-                (oldCreatedBy == uid) ||
-                (oldPartnerId == uid);
+        final belongsToMe = (newCreatedBy == uid) ||
+            (newPartnerId == uid) ||
+            (oldCreatedBy == uid) ||
+            (oldPartnerId == uid);
 
         if (!belongsToMe) return;
 
-        // ✅ Refresh ONLY on transitions:
         final oldStatus = oldRow['status'] as String?;
         final newStatus = newRow['status'] as String?;
 
@@ -139,7 +142,7 @@ class _HomePageState extends State<HomePage> {
 
         _reloadDebounce?.cancel();
         _reloadDebounce = Timer(const Duration(milliseconds: 250), () {
-          if (mounted) _loadMySessions(showLoading: false); // ✅ no flicker
+          if (mounted) _loadMySessions(showLoading: false);
         });
       },
     )
@@ -166,9 +169,7 @@ class _HomePageState extends State<HomePage> {
     try {
       final res = await sb
           .from('pair_sessions')
-          .select(
-        'id, created_by, partner_id, invite_code, status, created_at, completed_at',
-      )
+          .select('id, created_by, partner_id, invite_code, status, created_at, completed_at')
           .or('created_by.eq.$uid,partner_id.eq.$uid')
           .isFilter('archived_at', null)
           .order('created_at', ascending: false);
@@ -306,7 +307,6 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  // ✅ Single Pro entry point: always show explainer page first
   Future<void> _openPro() async {
     final changed = await Navigator.push<bool>(
       context,
@@ -384,15 +384,39 @@ class _HomePageState extends State<HomePage> {
 
   Widget _proChip() {
     return ValueListenableBuilder<bool>(
-      valueListenable: RevenueCatService.instance.isPro,
-      builder: (_, isPro, __) {
-        return TextButton.icon(
-          onPressed: isPro ? _openProManagement : _openPro,
-          icon: Icon(isPro ? Icons.verified : Icons.lock_outline),
-          label: Text(isPro ? 'Pro' : 'Unlock Pro'),
+      valueListenable: RevenueCatService.instance.isReady,
+      builder: (_, ready, __) {
+        return ValueListenableBuilder<bool>(
+          valueListenable: RevenueCatService.instance.isPro,
+          builder: (_, isPro, __) {
+            final label = !ready ? '…' : (isPro ? 'Pro' : 'Unlock Pro');
+            final icon = !ready
+                ? Icons.hourglass_top
+                : (isPro ? Icons.verified : Icons.lock_outline);
+
+            return TextButton.icon(
+              onPressed: !ready ? null : (isPro ? _openProManagement : _openPro),
+              icon: Icon(icon),
+              label: Text(label),
+            );
+          },
         );
       },
     );
+  }
+
+  Future<void> _logout() async {
+    try {
+      _stopRealtime();
+      // Auth listener will call handleAuthUserChanged() -> resetForLogout()
+      await sb.auth.signOut(scope: SignOutScope.local);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Logout failed: $e')),
+        );
+      }
+    }
   }
 
   @override
@@ -408,18 +432,7 @@ class _HomePageState extends State<HomePage> {
             tooltip: 'Refresh',
           ),
           IconButton(
-            onPressed: () async {
-              try {
-                _stopRealtime();
-                await sb.auth.signOut(scope: SignOutScope.local);
-              } catch (e) {
-                if (mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('Logout failed: $e')),
-                  );
-                }
-              }
-            },
+            onPressed: _logout,
             icon: const Icon(Icons.logout),
             tooltip: 'Logout',
           ),
@@ -547,8 +560,9 @@ class _HomePageState extends State<HomePage> {
                                 borderRadius: BorderRadius.circular(999),
                               ),
                               child: Text(
-                                  label.replaceAll(' ✅', ''),
-                                  style: const TextStyle(fontWeight: FontWeight.w700)),
+                                label.replaceAll(' ✅', ''),
+                                style: const TextStyle(fontWeight: FontWeight.w700),
+                              ),
                             ),
                           ],
                         ),

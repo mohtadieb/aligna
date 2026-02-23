@@ -13,6 +13,40 @@ class PremiumPaywallPage extends StatefulWidget {
 
 class _PremiumPaywallPageState extends State<PremiumPaywallPage> {
   bool _busy = false;
+  bool _popped = false;
+
+  @override
+  void initState() {
+    super.initState();
+
+    // Listen for Pro becoming true (purchase/restore)
+    RevenueCatService.instance.isPro.addListener(_maybeAutoPopIfPro);
+
+    // Also do an immediate check (if already Pro before opening)
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _maybeAutoPopIfPro();
+    });
+  }
+
+  @override
+  void dispose() {
+    RevenueCatService.instance.isPro.removeListener(_maybeAutoPopIfPro);
+    super.dispose();
+  }
+
+  void _maybeAutoPopIfPro() {
+    if (!mounted) return;
+    if (_popped) return;
+
+    final isPro = RevenueCatService.instance.isPro.value;
+    if (!isPro) return;
+
+    final nav = Navigator.of(context);
+    if (!nav.canPop()) return;
+
+    _popped = true;
+    nav.pop(true);
+  }
 
   Future<void> _startPurchaseFlow() async {
     if (_busy) return;
@@ -21,7 +55,6 @@ class _PremiumPaywallPageState extends State<PremiumPaywallPage> {
     try {
       await RevenueCatService.instance.configureIfNeeded();
 
-      // Show paywall (only if user doesn't already have entitlement)
       await RevenueCatUI.presentPaywallIfNeeded(RevenueCatService.entitlementId);
 
       // Refresh local entitlement cache
@@ -30,9 +63,8 @@ class _PremiumPaywallPageState extends State<PremiumPaywallPage> {
       if (!mounted) return;
 
       if (RevenueCatService.instance.isPro.value) {
-        Navigator.pop(context, true);
+        _maybeAutoPopIfPro();
       } else {
-        // They may have dismissed without buying
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Purchase not completed.')),
         );
@@ -59,7 +91,7 @@ class _PremiumPaywallPageState extends State<PremiumPaywallPage> {
       if (!mounted) return;
 
       if (RevenueCatService.instance.isPro.value) {
-        Navigator.pop(context, true);
+        _maybeAutoPopIfPro();
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('No purchases found to restore.')),
@@ -117,10 +149,7 @@ class _PremiumPaywallPageState extends State<PremiumPaywallPage> {
                 ],
               ),
             ),
-
             const SizedBox(height: 14),
-
-            // Tools
             Container(
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
@@ -147,33 +176,38 @@ class _PremiumPaywallPageState extends State<PremiumPaywallPage> {
                 ],
               ),
             ),
-
             const Spacer(),
 
             ValueListenableBuilder<bool>(
-              valueListenable: RevenueCatService.instance.isPro,
-              builder: (_, isPro, __) {
-                return Column(
-                  children: [
-                    SizedBox(
-                      width: double.infinity,
-                      height: 48,
-                      child: ElevatedButton(
-                        onPressed: (_busy || isPro) ? null : _startPurchaseFlow,
-                        child: Text(
-                          isPro ? 'Already unlocked ✅' : (_busy ? 'Opening…' : 'Continue'),
+              valueListenable: RevenueCatService.instance.isReady,
+              builder: (_, ready, __) {
+                return ValueListenableBuilder<bool>(
+                  valueListenable: RevenueCatService.instance.isPro,
+                  builder: (_, isPro, __) {
+                    final buttonLabel =
+                    !ready ? 'Loading…' : (isPro ? 'Already unlocked ✅' : (_busy ? 'Opening…' : 'Continue'));
+
+                    return Column(
+                      children: [
+                        SizedBox(
+                          width: double.infinity,
+                          height: 48,
+                          child: ElevatedButton(
+                            onPressed: (!ready || _busy || isPro) ? null : _startPurchaseFlow,
+                            child: Text(buttonLabel),
+                          ),
                         ),
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    Text(
-                      isPro
-                          ? 'You already have Aligna Pro on this account.'
-                          : 'One-time lifetime purchase.',
-                      style: const TextStyle(color: Colors.black54),
-                      textAlign: TextAlign.center,
-                    ),
-                  ],
+                        const SizedBox(height: 10),
+                        Text(
+                          !ready
+                              ? 'Checking your purchase status…'
+                              : (isPro ? 'You already have Aligna Pro on this account.' : 'One-time lifetime purchase.'),
+                          style: const TextStyle(color: Colors.black54),
+                          textAlign: TextAlign.center,
+                        ),
+                      ],
+                    );
+                  },
                 );
               },
             ),

@@ -9,41 +9,74 @@ class RevenueCatService {
 
   static const String entitlementId = 'aligna_pro';
 
-  // ✅ Your public test SDK key
+  // ✅ RevenueCat public SDK keys
   static const String _androidKey = 'test_SCJkyqEfQqDuuCxFkdryDKtDrBF';
-  static const String _iosKey = 'test_SCJkyqEfQqDuuCxFkdryDKtDrBF'; // replace later if different
+  static const String _iosKey = 'test_SCJkyqEfQqDuuCxFkdryDKtDrBF';
 
+  /// True only after we've finished at least 1 RC refresh for the current auth state.
+  /// UI can use this to avoid "Unlock Pro" flicker.
+  final ValueNotifier<bool> isReady = ValueNotifier<bool>(false);
+
+  /// Current entitlement state for the current user.
   final ValueNotifier<bool> isPro = ValueNotifier<bool>(false);
 
   bool _configured = false;
+  String? _configuredForUserId;
+
+  /// Call this whenever Supabase auth user changes (login/logout/refresh).
+  /// - On logout: clears state + logs out RevenueCat user
+  /// - On login: configures/logs in and refreshes
+  Future<void> handleAuthUserChanged() async {
+    final user = Supabase.instance.client.auth.currentUser;
+
+    if (user == null) {
+      await resetForLogout();
+      // mark ready so UI doesn't hang on "…"
+      isReady.value = true;
+      return;
+    }
+
+    await configureIfNeeded();
+  }
 
   Future<void> configureIfNeeded() async {
     final user = Supabase.instance.client.auth.currentUser;
     if (user == null) return;
 
+    // We're about to refresh for this user
+    isReady.value = false;
+
     final apiKey = Platform.isAndroid ? _androidKey : _iosKey;
 
+    // First-time configure
     if (!_configured) {
       await Purchases.setLogLevel(kDebugMode ? LogLevel.debug : LogLevel.info);
 
-      final configuration = PurchasesConfiguration(apiKey)
-        ..appUserID = user.id; // ✅ stable user id
-
+      final configuration = PurchasesConfiguration(apiKey)..appUserID = user.id;
       await Purchases.configure(configuration);
 
       Purchases.addCustomerInfoUpdateListener((info) {
         _applyCustomerInfo(info);
+        // listener implies we got info
+        isReady.value = true;
       });
 
       _configured = true;
-    } else {
-      // If your app can switch users without restart, keep RC in sync
+      _configuredForUserId = user.id;
+
+      await refresh();
+      return;
+    }
+
+    // SDK already configured; if user changed, log in new user
+    if (_configuredForUserId != user.id) {
       try {
         final result = await Purchases.logIn(user.id);
         _applyCustomerInfo(result.customerInfo);
       } catch (_) {
-        // ignore and just refresh
+        // ignore; we'll refresh anyway
       }
+      _configuredForUserId = user.id;
     }
 
     await refresh();
@@ -54,25 +87,49 @@ class RevenueCatService {
       final info = await Purchases.getCustomerInfo();
       _applyCustomerInfo(info);
     } catch (_) {
-      // Don’t crash UI if RevenueCat is temporarily unavailable
+      // keep UI stable if RC temporarily unavailable
+    } finally {
+      // Whether it succeeded or not, UI can stop showing "…"
+      isReady.value = true;
     }
   }
 
-  bool hasEntitlement(CustomerInfo info) {
-    return info.entitlements.active.containsKey(entitlementId);
-  }
-
   void _applyCustomerInfo(CustomerInfo info) {
-    isPro.value = hasEntitlement(info);
-  }
-
-  Future<bool> checkPro() async {
-    final info = await Purchases.getCustomerInfo();
-    return hasEntitlement(info);
+    isPro.value = info.entitlements.active.containsKey(entitlementId);
   }
 
   Future<void> restore() async {
-    final info = await Purchases.restorePurchases();
-    _applyCustomerInfo(info);
+    isReady.value = false;
+    try {
+      final info = await Purchases.restorePurchases();
+      _applyCustomerInfo(info);
+    } catch (_) {
+      // ignore
+    } finally {
+      isReady.value = true;
+    }
+  }
+
+  /// Clears UI state (no anonymous RevenueCat user creation).
+  Future<void> resetForLogout() async {
+    isReady.value = false;
+    isPro.value = false;
+    _configuredForUserId = null;
+
+    // If RC was never configured, we’re still “ready” for UI purposes
+    if (!_configured) {
+      isReady.value = true;
+      return;
+    }
+
+    try {
+      await Purchases.invalidateCustomerInfoCache();
+      // ✅ Keep this OFF if you don’t support guest users:
+      // await Purchases.logOut();
+    } catch (_) {
+      // ignore
+    } finally {
+      isReady.value = true;
+    }
   }
 }
