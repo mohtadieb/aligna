@@ -14,10 +14,7 @@ import '../../../services/supabase/results_service.dart';
 // ✅ RevenueCat source of truth (same as Home)
 import '../../../services/revenuecat/revenuecat_service.dart';
 
-// ✅ PDF export (add to pubspec.yaml)
-// dependencies:
-//   pdf: ^3.10.8
-//   printing: ^5.12.0
+// ✅ PDF export
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 
@@ -69,6 +66,17 @@ class _ResultsPageState extends State<ResultsPage> {
   Map<String, dynamic>? _aiSummaryJson;
   String? _aiSummaryRaw; // fallback if JSON parsing fails
 
+  // ✅ NEW: track whether summary came from shared couple cache
+  bool _aiSummaryIsShared = false;
+
+  // ✅ NEW: shared status + error (for “your partner is generating…” UX)
+  String? _aiSharedStatus; // generating | ready | error | null
+  String? _aiSharedErrorMessage;
+  DateTime? _aiSharedUpdatedAt;
+
+  Timer? _aiPollTimer;
+  int _aiPollTicks = 0;
+
   @override
   void initState() {
     super.initState();
@@ -76,28 +84,21 @@ class _ResultsPageState extends State<ResultsPage> {
     _proListener = () async {
       if (!mounted) return;
 
-      // ✅ Avoid setState during build
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) setState(() {});
       });
 
-      // Refresh DB truth too
       await _refreshDbPro();
     };
     RevenueCatService.instance.isPro.addListener(_proListener);
 
-    // ✅ Configure RC AFTER first frame (prevents notifier changes during build)
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _initRevenueCat();
     });
 
-    // Load page data + realtime
     _load().then((_) => _setupRealtime());
 
-    // DB truth for Pro
     _refreshDbPro();
-
-    // Attempt to load any saved AI summary
     _loadAiSummaryFromDb();
   }
 
@@ -106,9 +107,7 @@ class _ResultsPageState extends State<ResultsPage> {
       await RevenueCatService.instance.configureIfNeeded();
       await RevenueCatService.instance.refresh();
       if (mounted) setState(() {});
-    } catch (_) {
-      // keep silent
-    }
+    } catch (_) {}
   }
 
   @override
@@ -116,6 +115,8 @@ class _ResultsPageState extends State<ResultsPage> {
     RevenueCatService.instance.isPro.removeListener(_proListener);
 
     _reloadDebounce?.cancel();
+    _aiPollTimer?.cancel();
+
     final sb = Supabase.instance.client;
     if (_responsesChannel != null) sb.removeChannel(_responsesChannel!);
     if (_sessionChannel != null) sb.removeChannel(_sessionChannel!);
@@ -150,8 +151,6 @@ class _ResultsPageState extends State<ResultsPage> {
   }
 
   /// ✅ DB truth: checks purchases table.
-  /// Assumes you store the lifetime unlock as:
-  /// purchases.type = 'lifetime_unlock'
   Future<void> _refreshDbPro() async {
     final sb = Supabase.instance.client;
     final uid = sb.auth.currentUser?.id;
@@ -180,7 +179,6 @@ class _ResultsPageState extends State<ResultsPage> {
         _dbProReady = true;
       });
     } catch (_) {
-      // If DB check fails, don't block UI forever; treat as not-pro for hard gate.
       if (!mounted) return;
       setState(() {
         _dbPro = false;
@@ -197,11 +195,9 @@ class _ResultsPageState extends State<ResultsPage> {
     final sb = Supabase.instance.client;
     final myId = sb.auth.currentUser!.id;
 
-    // Always fetch session + responses (dynamic)
     final session = await _sessionService.getSession(widget.sessionId);
     final otherId = _otherUserId(session);
 
-    // ⚡ Load content once (static)
     if (!_contentLoaded) {
       final modules = await _content.fetchModules();
       final moduleIds = modules.map((m) => m['id'] as String).toList();
@@ -229,7 +225,6 @@ class _ResultsPageState extends State<ResultsPage> {
       _contentLoaded = true;
     }
 
-    // Responses
     final myMap = await _resultsService.getResponsesMapForUser(
       sessionId: widget.sessionId,
       userId: myId,
@@ -256,12 +251,14 @@ class _ResultsPageState extends State<ResultsPage> {
 
       _loading = false;
     });
+
+    // After session loads, attempt to load summary again (partner might now be joinable)
+    _loadAiSummaryFromDb();
   }
 
   void _setupRealtime() {
     final sb = Supabase.instance.client;
 
-    // Clean previous
     if (_responsesChannel != null) {
       sb.removeChannel(_responsesChannel!);
       _responsesChannel = null;
@@ -271,7 +268,6 @@ class _ResultsPageState extends State<ResultsPage> {
       _sessionChannel = null;
     }
 
-    // 1) responses changes (live scoring)
     _responsesChannel = sb.channel('realtime:responses:${widget.sessionId}');
     _responsesChannel!
         .onPostgresChanges(
@@ -292,7 +288,6 @@ class _ResultsPageState extends State<ResultsPage> {
     )
         .subscribe();
 
-    // 2) session row changes (partner joins / completed status)
     _sessionChannel = sb.channel('realtime:pair_sessions:${widget.sessionId}');
     _sessionChannel!
         .onPostgresChanges(
@@ -339,15 +334,12 @@ class _ResultsPageState extends State<ResultsPage> {
 
   String _cleanJsonishText(String s) {
     var t = s.trim();
-    // Remove triple backtick fences
     t = t.replaceFirst(RegExp(r'^```(?:json)?\s*', caseSensitive: false), '');
     t = t.replaceFirst(RegExp(r'```$', caseSensitive: false), '');
-    // Remove leading "json"
     t = t.replaceFirst(RegExp(r'^\s*json\s*', caseSensitive: false), '');
     return t.trim();
   }
 
-  /// Extract first {...} JSON object if model adds extra text.
   String? _extractFirstJsonObject(String s) {
     final t = _cleanJsonishText(s);
     final start = t.indexOf('{');
@@ -364,26 +356,22 @@ class _ResultsPageState extends State<ResultsPage> {
         }
       }
     }
-    return null; // unbalanced
+    return null;
   }
 
   Map<String, dynamic>? _tryParseSummary(dynamic summary) {
     if (summary == null) return null;
 
-    // If function already returns a Map
     if (summary is Map) {
       return Map<String, dynamic>.from(summary as Map);
     }
 
-    // If it's a JSON string
     if (summary is String) {
       final candidate = _extractFirstJsonObject(summary) ?? _cleanJsonishText(summary);
       try {
         final decoded = jsonDecode(candidate);
         if (decoded is Map) return Map<String, dynamic>.from(decoded);
-      } catch (_) {
-        // swallow
-      }
+      } catch (_) {}
     }
 
     return null;
@@ -425,12 +413,110 @@ class _ResultsPageState extends State<ResultsPage> {
     return b.toString().trim();
   }
 
-  /// ✅ Loads any previously generated summary (if exists) from ai_summaries.
+  bool get _hasAiSummary =>
+      _aiSummaryJson != null || (_aiSummaryRaw != null && _aiSummaryRaw!.trim().isNotEmpty);
+
+  void _stopAiPolling() {
+    _aiPollTimer?.cancel();
+    _aiPollTimer = null;
+    _aiPollTicks = 0;
+  }
+
+  void _startAiPollingIfNeeded() {
+    // Only poll when:
+    // - final ready
+    // - no summary yet
+    // - shared status says generating
+    if (!_finalReady) return;
+    if (_hasAiSummary) return;
+    if ((_aiSharedStatus ?? '').toLowerCase() != 'generating') return;
+
+    // Avoid multiple timers
+    if (_aiPollTimer != null) return;
+
+    _aiPollTicks = 0;
+    _aiPollTimer = Timer.periodic(const Duration(seconds: 2), (_) async {
+      _aiPollTicks += 1;
+
+      // Poll for up to ~30s
+      if (_aiPollTicks > 15) {
+        _stopAiPolling();
+        if (!mounted) return;
+        setState(() {
+          // keep status as-is; user can tap Refresh
+        });
+        return;
+      }
+
+      await _loadAiSummaryFromDb();
+      if (_hasAiSummary) {
+        _stopAiPolling();
+      }
+    });
+  }
+
+  /// ✅ Loads shared couple summary first, then falls back to per-user ai_summaries.
+  /// Also captures shared status/error if those columns exist.
   Future<void> _loadAiSummaryFromDb() async {
     final sb = Supabase.instance.client;
     final uid = sb.auth.currentUser?.id;
     if (uid == null) return;
 
+    // 1) Try shared couple summary (available to both participants)
+    try {
+      // Try full select (status/error_message/updated_at may not exist)
+      Map<String, dynamic>? shared;
+      try {
+        shared = await sb
+            .from('ai_couple_summaries')
+            .select('summary,status,error_message,updated_at')
+            .eq('session_id', widget.sessionId)
+            .maybeSingle();
+      } catch (_) {
+        // Fallback if columns do not exist
+        shared = await sb
+            .from('ai_couple_summaries')
+            .select('summary,updated_at')
+            .eq('session_id', widget.sessionId)
+            .maybeSingle();
+      }
+
+      final sharedRaw = shared?['summary'];
+      final sharedParsed = _tryParseSummary(sharedRaw);
+
+      final status = shared?['status']?.toString();
+      final err = shared?['error_message']?.toString();
+      final upd = shared?['updated_at'];
+      DateTime? updDt;
+      if (upd is String) {
+        updDt = DateTime.tryParse(upd);
+      }
+
+      if (!mounted) return;
+
+      // Always update shared status info if we got a row (even if summary is null)
+      if (shared != null) {
+        setState(() {
+          _aiSharedStatus = status;
+          _aiSharedErrorMessage = err;
+          _aiSharedUpdatedAt = updDt;
+        });
+      }
+
+      if (sharedRaw != null && sharedRaw.toString().trim().isNotEmpty) {
+        setState(() {
+          _aiSummaryIsShared = true;
+          _aiSummaryJson = sharedParsed;
+          _aiSummaryRaw = sharedParsed == null ? (sharedRaw.toString()) : null;
+        });
+        _stopAiPolling();
+        return;
+      }
+    } catch (_) {
+      // ignore and fallback to per-user
+    }
+
+    // 2) Fallback to per-user summary (Pro-only historically)
     try {
       final row = await sb
           .from('ai_summaries')
@@ -444,15 +530,22 @@ class _ResultsPageState extends State<ResultsPage> {
 
       if (!mounted) return;
       setState(() {
+        _aiSummaryIsShared = false;
         _aiSummaryJson = parsed;
         _aiSummaryRaw = parsed == null ? (raw?.toString()) : null;
       });
     } catch (e) {
       debugPrint('load ai summary failed: $e');
+    } finally {
+      // If shared says "generating" and we still don't have summary, start polling
+      if (mounted) {
+        _startAiPollingIfNeeded();
+      }
     }
   }
 
-  /// ✅ Generates AI summary via Supabase Edge Function.
+  /// ✅ Generates AI summary via Supabase Edge Function (Pro-only).
+  /// Handles 202 (someone else generating) by switching UI to "generating" + polling DB.
   Future<void> _generateAiSummary() async {
     if (_aiBusy) return;
 
@@ -475,13 +568,16 @@ class _ResultsPageState extends State<ResultsPage> {
       await _openProPaywall();
       if (!_hardPro && mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Pro is required for AI summary.')),
+          const SnackBar(content: Text('Pro is required to generate the AI summary.')),
         );
       }
       return;
     }
 
-    setState(() => _aiBusy = true);
+    setState(() {
+      _aiBusy = true;
+      _aiSharedErrorMessage = null;
+    });
 
     try {
       final sb = Supabase.instance.client;
@@ -491,13 +587,33 @@ class _ResultsPageState extends State<ResultsPage> {
         body: {'sessionId': widget.sessionId},
       );
 
+      // ✅ 202: another request is generating (lock held) -> poll DB
+      if (res.status == 202) {
+        await _loadAiSummaryFromDb(); // this might already become ready quickly
+
+        if (!mounted) return;
+
+        if (_hasAiSummary) {
+          setState(() {
+            _aiSharedStatus = 'ready';
+          });
+          _stopAiPolling();
+        } else {
+          setState(() {
+            _aiSharedStatus = 'generating';
+          });
+          _startAiPollingIfNeeded();
+        }
+
+        return;
+      }
+
       if (res.status != 200) {
         throw Exception('ai_summary failed: status=${res.status}, data=${res.data}');
       }
 
       final data = res.data;
 
-      // Preferred: { ok: true, summary: { ... } } OR { ok: true, summary: "<json string>" }
       dynamic summaryCandidate;
       if (data is Map) {
         summaryCandidate = data['summary'];
@@ -508,21 +624,36 @@ class _ResultsPageState extends State<ResultsPage> {
       if (parsed != null) {
         if (!mounted) return;
         setState(() {
+          _aiSummaryIsShared = true; // function writes shared table too
           _aiSummaryJson = parsed;
           _aiSummaryRaw = null;
+          _aiSharedStatus = 'ready';
         });
+        _stopAiPolling();
         return;
       }
 
-      // ✅ If function didn't return summary, it may still have saved to DB.
+      // If function didn't return summary, it may still have saved to DB.
       await _loadAiSummaryFromDb();
 
-      if (_aiSummaryJson == null && (_aiSummaryRaw == null || _aiSummaryRaw!.trim().isEmpty)) {
+      if (!_hasAiSummary) {
         throw Exception('No summary returned from function');
       }
+
+      if (!mounted) return;
+      setState(() {
+        _aiSharedStatus = 'ready';
+      });
+      _stopAiPolling();
     } catch (e) {
       if (!mounted) return;
       debugPrint('ai_summary FunctionException: $e');
+
+      setState(() {
+        _aiSharedStatus = 'error';
+        _aiSharedErrorMessage = e.toString();
+      });
+
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('AI summary failed: $e')),
       );
@@ -544,7 +675,6 @@ class _ResultsPageState extends State<ResultsPage> {
     // Hard gate: DB truth
     if (!_hardPro) {
       await _openProPaywall();
-      // re-check
       if (!_hardPro) {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
@@ -1014,6 +1144,9 @@ class _ResultsPageState extends State<ResultsPage> {
 
     final mismatchLimit = _isPro ? 20 : 5;
 
+    final sharedStatus = (_aiSharedStatus ?? '').toLowerCase();
+    final showGeneratingHint = _finalReady && !_hasAiSummary && sharedStatus == 'generating';
+
     return Scaffold(
       appBar: AppBar(
         title: Text(_finalReady ? 'Results (Final)' : 'Results (Live)'),
@@ -1145,7 +1278,7 @@ class _ResultsPageState extends State<ResultsPage> {
                 const Divider(height: 1),
                 const SizedBox(height: 14),
 
-                // ✅ AI Summary block (Pro + Final)
+                // ✅ AI Summary block (shared view allowed)
                 Row(
                   children: [
                     const Expanded(
@@ -1154,7 +1287,7 @@ class _ResultsPageState extends State<ResultsPage> {
                         style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800),
                       ),
                     ),
-                    if (!_isPro)
+                    if (!_hasAiSummary && !_isPro)
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                         decoration: BoxDecoration(
@@ -1175,76 +1308,141 @@ class _ResultsPageState extends State<ResultsPage> {
                     'AI summary unlocks when final results are ready.',
                     style: TextStyle(color: Colors.black54),
                   )
-                else if (!_isPro)
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                else if (_hasAiSummary) ...[
+                  if (_aiSummaryIsShared)
+                    const Text(
+                      'Shared summary (generated by your partner or you).',
+                      style: TextStyle(color: Colors.black54, fontSize: 12),
+                    ),
+                  if (!_aiSummaryIsShared)
+                    const Text(
+                      'Personal summary (legacy).',
+                      style: TextStyle(color: Colors.black54, fontSize: 12),
+                    ),
+                  const SizedBox(height: 8),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(color: Colors.black12),
+                    ),
+                    child: _aiSummaryJson != null
+                        ? _AiSummaryView(json: _aiSummaryJson!)
+                        : Text(_aiSummaryRaw ?? '', style: const TextStyle(color: Colors.black87)),
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
                     children: [
-                      const Text(
-                        'Unlock Pro to generate an AI summary of your compatibility.',
-                        style: TextStyle(color: Colors.black54),
+                      TextButton.icon(
+                        onPressed: _aiBusy ? null : _loadAiSummaryFromDb,
+                        icon: const Icon(Icons.refresh, size: 18),
+                        label: const Text('Refresh'),
                       ),
-                      const SizedBox(height: 12),
-                      SizedBox(
-                        width: double.infinity,
-                        height: 44,
+                      const SizedBox(width: 6),
+                      TextButton.icon(
+                        onPressed: () async {
+                          final text = _aiSummaryJson != null
+                              ? const JsonEncoder.withIndent('  ').convert(_aiSummaryJson)
+                              : (_aiSummaryRaw ?? '');
+                          if (text.trim().isEmpty) return;
+                          await Clipboard.setData(ClipboardData(text: text));
+                          if (!mounted) return;
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(content: Text('Summary copied')),
+                          );
+                        },
+                        icon: const Icon(Icons.copy, size: 18),
+                        label: const Text('Copy'),
+                      ),
+                    ],
+                  ),
+                ] else if (showGeneratingHint) ...[
+                  Text(
+                    'Your summary is being generated…',
+                    style: const TextStyle(color: Colors.black87, fontWeight: FontWeight.w700),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    'This usually takes a few seconds. You can stay here — it will appear automatically.',
+                    style: const TextStyle(color: Colors.black54),
+                  ),
+                  if ((_aiSharedUpdatedAt != null))
+                    Padding(
+                      padding: const EdgeInsets.only(top: 6),
+                      child: Text(
+                        'Last update: ${_aiSharedUpdatedAt!.toLocal().toIso8601String()}',
+                        style: const TextStyle(color: Colors.black45, fontSize: 12),
+                      ),
+                    ),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      Expanded(
                         child: ElevatedButton(
-                          onPressed: _openProPaywall,
-                          child: const Text('Unlock Pro'),
+                          onPressed: _aiBusy ? null : () async {
+                            await _loadAiSummaryFromDb();
+                            _startAiPollingIfNeeded();
+                          },
+                          child: const Text('Refresh now'),
                         ),
                       ),
                     ],
-                  )
-                else ...[
-                    if (_aiSummaryJson == null && (_aiSummaryRaw == null || _aiSummaryRaw!.trim().isEmpty))
-                      SizedBox(
-                        width: double.infinity,
-                        height: 44,
-                        child: ElevatedButton(
-                          onPressed: _aiBusy ? null : _generateAiSummary,
-                          child: Text(_aiBusy ? 'Generating…' : 'Generate summary'),
-                        ),
-                      )
-                    else ...[
-                      Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(14),
-                          border: Border.all(color: Colors.black12),
-                        ),
-                        child: _aiSummaryJson != null
-                            ? _AiSummaryView(json: _aiSummaryJson!)
-                            : Text(_aiSummaryRaw ?? '', style: const TextStyle(color: Colors.black87)),
+                  ),
+                ] else if (_aiSharedStatus == 'error' && (_aiSharedErrorMessage ?? '').isNotEmpty) ...[
+                  const Text(
+                    'AI summary failed to generate.',
+                    style: TextStyle(color: Colors.black87, fontWeight: FontWeight.w700),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    _aiSharedErrorMessage!,
+                    style: const TextStyle(color: Colors.black54),
+                  ),
+                  const SizedBox(height: 12),
+                  if (_isPro)
+                    SizedBox(
+                      width: double.infinity,
+                      height: 44,
+                      child: ElevatedButton(
+                        onPressed: _aiBusy ? null : _generateAiSummary,
+                        child: Text(_aiBusy ? 'Generating…' : 'Try again'),
                       ),
-                      const SizedBox(height: 8),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.end,
-                        children: [
-                          TextButton.icon(
-                            onPressed: _aiBusy ? null : _loadAiSummaryFromDb,
-                            icon: const Icon(Icons.refresh, size: 18),
-                            label: const Text('Refresh'),
-                          ),
-                          const SizedBox(width: 6),
-                          TextButton.icon(
-                            onPressed: () async {
-                              final text = _aiSummaryJson != null
-                                  ? const JsonEncoder.withIndent('  ').convert(_aiSummaryJson)
-                                  : (_aiSummaryRaw ?? '');
-                              if (text.trim().isEmpty) return;
-                              await Clipboard.setData(ClipboardData(text: text));
-                              if (!mounted) return;
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(content: Text('Summary copied')),
-                              );
-                            },
-                            icon: const Icon(Icons.copy, size: 18),
-                            label: const Text('Copy'),
-                          ),
-                        ],
+                    )
+                  else
+                    SizedBox(
+                      width: double.infinity,
+                      height: 44,
+                      child: ElevatedButton(
+                        onPressed: _openProPaywall,
+                        child: const Text('Unlock Pro'),
                       ),
-                    ],
-                  ],
+                    ),
+                ] else if (!_isPro) ...[
+                  const Text(
+                    'Unlock Pro to generate an AI summary of your compatibility.',
+                    style: TextStyle(color: Colors.black54),
+                  ),
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    width: double.infinity,
+                    height: 44,
+                    child: ElevatedButton(
+                      onPressed: _openProPaywall,
+                      child: const Text('Unlock Pro'),
+                    ),
+                  ),
+                ] else ...[
+                  SizedBox(
+                    width: double.infinity,
+                    height: 44,
+                    child: ElevatedButton(
+                      onPressed: _aiBusy ? null : _generateAiSummary,
+                      child: Text(_aiBusy ? 'Generating…' : 'Generate summary'),
+                    ),
+                  ),
+                ],
               ],
             ),
           ),
@@ -1312,7 +1510,6 @@ class _ResultsPageState extends State<ResultsPage> {
 
           const SizedBox(height: 24),
 
-          // ✅ Export PDF (real functionality)
           if (_finalReady) ...[
             SizedBox(
               height: 48,
