@@ -1,10 +1,10 @@
 // supabase/functions/ai_summary/index.ts
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 
-function json(data: unknown, status = 200) {
+function json(data: unknown, status = 200, extraHeaders: Record<string, string> = {}) {
   return new Response(JSON.stringify(data), {
     status,
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", ...extraHeaders },
   });
 }
 
@@ -200,7 +200,6 @@ async function logAiEvent(opts: {
 }) {
   const { supabaseUrl, serviceKey, sessionId, userId, event, details } = opts;
 
-  // If you ever rename this table, update here
   const url = `${supabaseUrl}/rest/v1/ai_generation_events`;
 
   try {
@@ -223,12 +222,26 @@ async function logAiEvent(opts: {
       },
       { retries: 2, baseDelayMs: 200, timeoutMs: 8000, retryOnStatuses: true },
     );
-  } catch (_) {
-    // Do not break summary generation on audit failures
-  }
+  } catch (_) {}
 }
 
 // ---------------- Gemini calls ----------------
+
+function extractRetryDelaySecondsFromGeminiError(raw: string): number | null {
+  try {
+    const j = JSON.parse(raw);
+    const details = Array.isArray(j?.error?.details) ? j.error.details : [];
+    const retryInfo = details.find((d: any) =>
+      String(d?.["@type"] ?? "").includes("google.rpc.RetryInfo")
+    );
+    const retryDelay = retryInfo?.retryDelay;
+    if (typeof retryDelay === "string" && retryDelay.endsWith("s")) {
+      const n = Number(retryDelay.slice(0, -1));
+      return Number.isFinite(n) ? n : null;
+    }
+  } catch (_) {}
+  return null;
+}
 
 async function callGemini(opts: {
   apiKey: string;
@@ -254,7 +267,7 @@ async function callGemini(opts: {
           contents: [{ role: "user", parts: [{ text: prompt }] }],
           generationConfig: {
             temperature: opts.temperature ?? 0.4,
-            maxOutputTokens: opts.maxOutputTokens ?? 4096,
+            maxOutputTokens: opts.maxOutputTokens ?? 4096, // ✅ old token count
             responseMimeType: "application/json",
           },
         }),
@@ -302,7 +315,7 @@ async function callGeminiWithFallback(opts: {
       model,
       prompt,
       temperature: opts.temperature ?? 0.4,
-      maxOutputTokens: opts.maxOutputTokens ?? 4096,
+      maxOutputTokens: opts.maxOutputTokens ?? 4096, // ✅ old token count
     });
 
     if (first.ok) return { ok: true as const, modelUsed: model, raw: first.raw };
@@ -499,7 +512,7 @@ ${toneInstruction(tone)}
 ${metricsBlock}
 
 SUPPORTING ANSWERS (compact; may include free-text):
-answers=${JSON.stringify(compactedAnswers).slice(0, 90000)}
+answers=${JSON.stringify(compactedAnswers).slice(0, 90000)}  // ✅ old slice
 
 QUALITY RULES:
 - Prioritize top mismatched questions for Risks + Discussion Prompts.
@@ -676,7 +689,6 @@ async function patchCoupleSummaryWithFallback(opts: {
     prefer: "return=minimal",
   };
 
-  // Try full patch first
   const res1 = await fetchWithRetry(
     url,
     { method: "PATCH", headers, body: JSON.stringify(patch) },
@@ -687,7 +699,6 @@ async function patchCoupleSummaryWithFallback(opts: {
 
   const t1 = await res1.text().catch(() => "");
 
-  // If missing columns, retry with only canonical cols
   const looksLikeMissingCol =
     t1.toLowerCase().includes("does not exist") ||
     t1.toLowerCase().includes("could not find");
@@ -715,7 +726,6 @@ async function patchCoupleSummaryWithFallback(opts: {
   return false;
 }
 
-// Lightweight read helper for shared summary
 async function fetchCoupleSummaryRow(opts: {
   supabaseUrl: string;
   serviceKey: string;
@@ -723,7 +733,6 @@ async function fetchCoupleSummaryRow(opts: {
 }) {
   const { supabaseUrl, serviceKey, sessionId } = opts;
 
-  // Try with status fields; fallback if columns missing
   const urlFull =
     `${supabaseUrl}/rest/v1/ai_couple_summaries?select=session_id,summary,status,generated_by,updated_at,error_message&session_id=eq.${sessionId}&limit=1`;
   const urlMinimal =
@@ -753,7 +762,6 @@ async function fetchCoupleSummaryRow(opts: {
   const a = await tryFetch(urlFull);
   if (a.ok) return a.row;
 
-  // fallback if missing columns
   const b = await tryFetch(urlMinimal);
   if (b.ok) return b.row;
 
@@ -770,10 +778,10 @@ serve(async (req) => {
     const geminiKey = Deno.env.get("GEMINI_API_KEY") ?? "";
     const primaryModel = Deno.env.get("GEMINI_MODEL") ?? "gemini-3-flash-preview";
 
+    // ✅ FIX: remove gemini-3-pro-preview fallback (your quota is 0 for gemini-3-pro)
     const modelFallbacks = [
       primaryModel,
       "gemini-3-flash-preview",
-      "gemini-3-pro-preview",
     ];
 
     if (!supabaseUrl || !serviceKey) {
@@ -803,7 +811,7 @@ serve(async (req) => {
     const { sessionId } = (await req.json()) as ReqBody;
     if (!sessionId) return json({ error: "Missing sessionId" }, 400);
 
-    // 2) If shared summary already exists -> return immediately (no Pro needed to VIEW)
+    // 2) If shared summary already exists -> return immediately
     const existingCouple = await fetchCoupleSummaryRow({ supabaseUrl, serviceKey, sessionId });
     if (existingCouple?.summary && String(existingCouple.summary).trim().length > 0) {
       await logAiEvent({
@@ -815,16 +823,12 @@ serve(async (req) => {
         details: { source: "shared_cache" },
       });
       return json(
-        {
-          ok: true,
-          summary: existingCouple.summary,
-          source: "shared_cache",
-        },
+        { ok: true, summary: existingCouple.summary, source: "shared_cache" },
         200,
       );
     }
 
-    // 3) Check Pro (purchases table) — generation only
+    // 3) Check Pro — generation only
     const proRes = await fetchWithRetry(
       `${supabaseUrl}/rest/v1/purchases?select=id&user_id=eq.${userId}&type=eq.lifetime_unlock&limit=1`,
       { headers: { apikey: serviceKey, authorization: `Bearer ${serviceKey}` } },
@@ -856,7 +860,6 @@ serve(async (req) => {
     const session = sessionRows?.[0];
     if (!session) return json({ error: "Session not found" }, 404);
 
-    // ✅ AI summary only allowed on completed sessions
     if (session.status !== "completed") {
       return json(
         { error: "Session not completed", details: "AI summary is only available after completion." },
@@ -864,7 +867,7 @@ serve(async (req) => {
       );
     }
 
-    // 5) CLAIM (race-safe): only one caller is allowed to actually call Gemini
+    // 5) CLAIM lock
     const claim = await claimCoupleSummaryGeneration({
       supabaseUrl,
       serviceKey,
@@ -878,7 +881,6 @@ serve(async (req) => {
     }
 
     if (!claim.claimed) {
-      // Someone else is generating, or it became ready after claim check
       await logAiEvent({
         supabaseUrl,
         serviceKey,
@@ -900,7 +902,6 @@ serve(async (req) => {
 
     await logAiEvent({ supabaseUrl, serviceKey, sessionId, userId, event: "claimed" });
 
-    // Mark generating if columns exist (safe fallback)
     await patchCoupleSummaryWithFallback({
       supabaseUrl,
       serviceKey,
@@ -950,13 +951,8 @@ serve(async (req) => {
       a: r.value,
     }));
 
-    // 7) Metrics + tone personalization
-    const metrics = await fetchCompatibilityMetrics({
-      supabaseUrl,
-      serviceKey,
-      sessionId,
-    });
-
+    // 7) Metrics + tone
+    const metrics = await fetchCompatibilityMetrics({ supabaseUrl, serviceKey, sessionId });
     const { tone, rationale } = computeToneProfile(metrics);
     console.log("tone_profile:", tone, rationale);
 
@@ -967,7 +963,7 @@ serve(async (req) => {
       tone,
     });
 
-    // 8) Gemini
+    // 8) Gemini (old token count)
     const first = await callGeminiWithFallback({
       apiKey: geminiKey,
       models: modelFallbacks,
@@ -977,7 +973,46 @@ serve(async (req) => {
     });
 
     if (!first.ok) {
-      const errText = first.lastErr?.raw ?? null;
+      const status = first.lastErr?.status ?? 0;
+      const raw = first.lastErr?.raw ?? null;
+
+      // ✅ FIX: if Gemini quota/rate limit -> return 429 with retry info
+      if (status === 429 && typeof raw === "string") {
+        const retryAfterSeconds = extractRetryDelaySecondsFromGeminiError(raw) ?? 20;
+
+        await logAiEvent({
+          supabaseUrl,
+          serviceKey,
+          sessionId,
+          userId,
+          event: "gemini_rate_limited",
+          details: { retryAfterSeconds },
+        });
+
+        await patchCoupleSummaryWithFallback({
+          supabaseUrl,
+          serviceKey,
+          sessionId,
+          patch: {
+            status: "error",
+            error_message: `Rate limit exceeded. Retry in ~${retryAfterSeconds}s.`,
+            updated_at: new Date().toISOString(),
+          },
+        }).catch(() => {});
+
+        let parsedDetails: any = null;
+        try {
+          parsedDetails = JSON.parse(raw);
+        } catch (_) {
+          parsedDetails = raw;
+        }
+
+        return json(
+          { error: "Gemini rate limited", retryAfterSeconds, details: parsedDetails },
+          429,
+          { "retry-after": String(retryAfterSeconds) },
+        );
+      }
 
       await logAiEvent({
         supabaseUrl,
@@ -985,7 +1020,7 @@ serve(async (req) => {
         sessionId,
         userId,
         event: "gemini_failed",
-        details: { raw: String(errText ?? "unknown").slice(0, 500) },
+        details: { raw: String(raw ?? "unknown").slice(0, 500) },
       });
 
       await patchCoupleSummaryWithFallback({
@@ -994,12 +1029,12 @@ serve(async (req) => {
         sessionId,
         patch: {
           status: "error",
-          error_message: `Gemini failed: ${String(errText ?? "unknown")}`.slice(0, 2000),
+          error_message: `Gemini failed: ${String(raw ?? "unknown")}`.slice(0, 2000),
           updated_at: new Date().toISOString(),
         },
       }).catch(() => {});
 
-      return json({ error: "Gemini failed", details: errText }, 500);
+      return json({ error: "Gemini failed", details: raw }, 500);
     }
 
     // 9) Parse / repair JSON, retry once if needed
@@ -1019,39 +1054,17 @@ ${first.raw}
         models: modelFallbacks,
         prompt: fixPrompt,
         temperature: 0.0,
-        maxOutputTokens: 3072,
+        maxOutputTokens: 3072, // ✅ old repair token count
       });
 
       if (!second.ok) {
         const shapedFallback = fallbackSummary("AI output could not be repaired into JSON.");
         const summaryString = JSON.stringify(shapedFallback);
 
-        await logAiEvent({
-          supabaseUrl,
-          serviceKey,
-          sessionId,
-          userId,
-          event: "json_repair_failed",
-        });
+        await logAiEvent({ supabaseUrl, serviceKey, sessionId, userId, event: "json_repair_failed" });
 
-        await upsertAiSummary({
-          supabaseUrl,
-          serviceKey,
-          sessionId,
-          userId,
-          summaryString,
-          metrics,
-        }).catch(() => {});
-
-        await upsertCoupleSummary({
-          supabaseUrl,
-          serviceKey,
-          sessionId,
-          summaryString,
-          metrics,
-          generatedBy: userId,
-        }).catch(() => {});
-
+        await upsertAiSummary({ supabaseUrl, serviceKey, sessionId, userId, summaryString, metrics }).catch(() => {});
+        await upsertCoupleSummary({ supabaseUrl, serviceKey, sessionId, summaryString, metrics, generatedBy: userId }).catch(() => {});
         await patchCoupleSummaryWithFallback({
           supabaseUrl,
           serviceKey,
@@ -1065,15 +1078,6 @@ ${first.raw}
             updated_at: new Date().toISOString(),
           },
         }).catch(() => {});
-
-        await logAiEvent({
-          supabaseUrl,
-          serviceKey,
-          sessionId,
-          userId,
-          event: "saved",
-          details: { kind: "fallback_unrepaired" },
-        });
 
         return json({ ok: true, summary: shapedFallback, note: "Fallback summary returned" }, 200);
       }
@@ -1083,32 +1087,10 @@ ${first.raw}
         const shapedFallback = fallbackSummary("AI output was invalid JSON.");
         const summaryString = JSON.stringify(shapedFallback);
 
-        await logAiEvent({
-          supabaseUrl,
-          serviceKey,
-          sessionId,
-          userId,
-          event: "json_invalid_after_repair",
-        });
+        await logAiEvent({ supabaseUrl, serviceKey, sessionId, userId, event: "json_invalid_after_repair" });
 
-        await upsertAiSummary({
-          supabaseUrl,
-          serviceKey,
-          sessionId,
-          userId,
-          summaryString,
-          metrics,
-        }).catch(() => {});
-
-        await upsertCoupleSummary({
-          supabaseUrl,
-          serviceKey,
-          sessionId,
-          summaryString,
-          metrics,
-          generatedBy: userId,
-        }).catch(() => {});
-
+        await upsertAiSummary({ supabaseUrl, serviceKey, sessionId, userId, summaryString, metrics }).catch(() => {});
+        await upsertCoupleSummary({ supabaseUrl, serviceKey, sessionId, summaryString, metrics, generatedBy: userId }).catch(() => {});
         await patchCoupleSummaryWithFallback({
           supabaseUrl,
           serviceKey,
@@ -1123,15 +1105,6 @@ ${first.raw}
           },
         }).catch(() => {});
 
-        await logAiEvent({
-          supabaseUrl,
-          serviceKey,
-          sessionId,
-          userId,
-          event: "saved",
-          details: { kind: "fallback_invalid" },
-        });
-
         return json({ ok: true, summary: shapedFallback, note: "Fallback summary returned" }, 200);
       }
     }
@@ -1139,7 +1112,7 @@ ${first.raw}
     const shaped = enforceShape(parsed.value);
     const summaryString = JSON.stringify(shaped);
 
-    // 10) Save per-user (backward compatible)
+    // 10) Save per-user
     const save = await upsertAiSummary({
       supabaseUrl,
       serviceKey,
@@ -1172,7 +1145,7 @@ ${first.raw}
       return json({ error: "Failed to save summary", details: (save as any).details ?? null }, 500);
     }
 
-    // 11) Save shared couple summary (canonical) + mark ready
+    // 11) Save shared couple summary + mark ready
     await upsertCoupleSummary({
       supabaseUrl,
       serviceKey,
