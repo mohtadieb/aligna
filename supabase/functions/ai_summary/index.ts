@@ -1,7 +1,11 @@
 // supabase/functions/ai_summary/index.ts
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 
-function json(data: unknown, status = 200, extraHeaders: Record<string, string> = {}) {
+function json(
+  data: unknown,
+  status = 200,
+  extraHeaders: Record<string, string> = {},
+) {
   return new Response(JSON.stringify(data), {
     status,
     headers: { "content-type": "application/json", ...extraHeaders },
@@ -32,6 +36,15 @@ function looksLikeConnectionReset(err: unknown) {
     msg.toLowerCase().includes("timed out") ||
     msg.toLowerCase().includes("timeout") ||
     msg.toLowerCase().includes("network")
+  );
+}
+
+function isAbortError(err: unknown) {
+  const msg = String(err ?? "").toLowerCase();
+  return (
+    msg.includes("aborterror") ||
+    msg.includes("aborted") ||
+    msg.includes("the signal has been aborted")
   );
 }
 
@@ -75,10 +88,7 @@ async function fetchWithRetry(
       clearTimeout(t);
       lastErr = e;
 
-      const retryable =
-        looksLikeConnectionReset(e) ||
-        String(e).toLowerCase().includes("aborterror");
-
+      const retryable = looksLikeConnectionReset(e) || isAbortError(e);
       if (!retryable || attempt >= retries) throw e;
 
       const delay = baseDelayMs * Math.pow(2, attempt);
@@ -267,16 +277,21 @@ async function callGemini(opts: {
           contents: [{ role: "user", parts: [{ text: prompt }] }],
           generationConfig: {
             temperature: opts.temperature ?? 0.4,
-            maxOutputTokens: opts.maxOutputTokens ?? 4096, // ✅ old token count
+            maxOutputTokens: opts.maxOutputTokens ?? 4096,
             responseMimeType: "application/json",
           },
         }),
       },
-      { retries: 2, baseDelayMs: 450, timeoutMs: 18_000, retryOnStatuses: false },
+      // ✅ Longer timeout so high-token generations don't get aborted.
+      { retries: 1, baseDelayMs: 650, timeoutMs: 120_000, retryOnStatuses: false },
     );
 
     text = await res.text().catch(() => "");
   } catch (e) {
+    // ✅ Treat aborts like "still generating" so client can poll.
+    if (isAbortError(e)) {
+      return { ok: false as const, status: 202, raw: "AbortError: request timed out locally" };
+    }
     return { ok: false as const, status: 0, raw: String(e) };
   }
 
@@ -315,10 +330,15 @@ async function callGeminiWithFallback(opts: {
       model,
       prompt,
       temperature: opts.temperature ?? 0.4,
-      maxOutputTokens: opts.maxOutputTokens ?? 4096, // ✅ old token count
+      maxOutputTokens: opts.maxOutputTokens ?? 4096,
     });
 
     if (first.ok) return { ok: true as const, modelUsed: model, raw: first.raw };
+
+    // If our local timeout/abort triggered, stop trying other models and let client poll.
+    if (first.status === 202) {
+      return { ok: false as const, lastErr: first };
+    }
 
     if (first.status === 503) {
       await sleep(650);
@@ -512,7 +532,7 @@ ${toneInstruction(tone)}
 ${metricsBlock}
 
 SUPPORTING ANSWERS (compact; may include free-text):
-answers=${JSON.stringify(compactedAnswers).slice(0, 90000)}  // ✅ old slice
+answers=${JSON.stringify(compactedAnswers).slice(0, 90000)}
 
 QUALITY RULES:
 - Prioritize top mismatched questions for Risks + Discussion Prompts.
@@ -963,7 +983,7 @@ serve(async (req) => {
       tone,
     });
 
-    // 8) Gemini (old token count)
+    // 8) Gemini
     const first = await callGeminiWithFallback({
       apiKey: geminiKey,
       models: modelFallbacks,
@@ -976,7 +996,35 @@ serve(async (req) => {
       const status = first.lastErr?.status ?? 0;
       const raw = first.lastErr?.raw ?? null;
 
-      // ✅ FIX: if Gemini quota/rate limit -> return 429 with retry info
+      // ✅ NEW: if our request locally aborted (timeout/network), keep status generating + return 202
+      if (status === 202) {
+        await logAiEvent({
+          supabaseUrl,
+          serviceKey,
+          sessionId,
+          userId,
+          event: "gemini_aborted_return_202",
+          details: { note: String(raw ?? "").slice(0, 200) },
+        });
+
+        await patchCoupleSummaryWithFallback({
+          supabaseUrl,
+          serviceKey,
+          sessionId,
+          patch: {
+            status: "generating",
+            error_message: null,
+            updated_at: new Date().toISOString(),
+          },
+        }).catch(() => {});
+
+        return json(
+          { ok: false, status: "generating", note: "Generation is taking longer; please poll." },
+          202,
+        );
+      }
+
+      // ✅ existing: Gemini quota/rate limit -> return 429 with retry info
       if (status === 429 && typeof raw === "string") {
         const retryAfterSeconds = extractRetryDelaySecondsFromGeminiError(raw) ?? 20;
 
@@ -1020,7 +1068,7 @@ serve(async (req) => {
         sessionId,
         userId,
         event: "gemini_failed",
-        details: { raw: String(raw ?? "unknown").slice(0, 500) },
+        details: { status, raw: String(raw ?? "unknown").slice(0, 500) },
       });
 
       await patchCoupleSummaryWithFallback({
@@ -1054,7 +1102,7 @@ ${first.raw}
         models: modelFallbacks,
         prompt: fixPrompt,
         temperature: 0.0,
-        maxOutputTokens: 3072, // ✅ old repair token count
+        maxOutputTokens: 3072,
       });
 
       if (!second.ok) {

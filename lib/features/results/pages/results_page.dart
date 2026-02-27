@@ -62,18 +62,17 @@ class _ResultsPageState extends State<ResultsPage> {
   bool _dbProReady = false;
 
   // ✅ AI summary state
-  bool _aiBusy = false;
+  bool _aiBusy = false; // "I pressed generate" state
   Map<String, dynamic>? _aiSummaryJson;
   String? _aiSummaryRaw; // fallback if JSON parsing fails
 
-  // ✅ NEW: track whether summary came from shared couple cache
+  // ✅ Track whether summary came from shared couple cache
   bool _aiSummaryIsShared = false;
 
-  // ✅ NEW: shared status + error (for “your partner is generating…” UX)
-  String? _aiSharedStatus; // generating | ready | error | null
-  String? _aiSharedErrorMessage;
-  DateTime? _aiSharedUpdatedAt;
+  // ✅ Simple error field for generation failures (no partner-status logic)
+  String? _aiErrorMessage;
 
+  // ✅ Poll after pressing generate so it appears automatically
   Timer? _aiPollTimer;
   int _aiPollTicks = 0;
 
@@ -252,7 +251,7 @@ class _ResultsPageState extends State<ResultsPage> {
       _loading = false;
     });
 
-    // After session loads, attempt to load summary again (partner might now be joinable)
+    // After session loads, attempt to load summary again
     _loadAiSummaryFromDb();
   }
 
@@ -422,29 +421,25 @@ class _ResultsPageState extends State<ResultsPage> {
     _aiPollTicks = 0;
   }
 
-  void _startAiPollingIfNeeded() {
-    // Only poll when:
+  void _startAiPollingAfterGenerate() {
+    // Poll only when:
+    // - this user started generation (_aiBusy true)
     // - final ready
-    // - no summary yet
-    // - shared status says generating
+    // - still no summary
     if (!_finalReady) return;
     if (_hasAiSummary) return;
-    if ((_aiSharedStatus ?? '').toLowerCase() != 'generating') return;
 
-    // Avoid multiple timers
     if (_aiPollTimer != null) return;
 
     _aiPollTicks = 0;
     _aiPollTimer = Timer.periodic(const Duration(seconds: 2), (_) async {
       _aiPollTicks += 1;
 
-      // Poll for up to ~30s
-      if (_aiPollTicks > 15) {
+      // Poll for up to ~45s
+      if (_aiPollTicks > 22) {
         _stopAiPolling();
         if (!mounted) return;
-        setState(() {
-          // keep status as-is; user can tap Refresh
-        });
+        setState(() {});
         return;
       }
 
@@ -456,7 +451,6 @@ class _ResultsPageState extends State<ResultsPage> {
   }
 
   /// ✅ Loads shared couple summary first, then falls back to per-user ai_summaries.
-  /// Also captures shared status/error if those columns exist.
   Future<void> _loadAiSummaryFromDb() async {
     final sb = Supabase.instance.client;
     final uid = sb.auth.currentUser?.id;
@@ -464,44 +458,16 @@ class _ResultsPageState extends State<ResultsPage> {
 
     // 1) Try shared couple summary (available to both participants)
     try {
-      // Try full select (status/error_message/updated_at may not exist)
-      Map<String, dynamic>? shared;
-      try {
-        shared = await sb
-            .from('ai_couple_summaries')
-            .select('summary,status,error_message,updated_at')
-            .eq('session_id', widget.sessionId)
-            .maybeSingle();
-      } catch (_) {
-        // Fallback if columns do not exist
-        shared = await sb
-            .from('ai_couple_summaries')
-            .select('summary,updated_at')
-            .eq('session_id', widget.sessionId)
-            .maybeSingle();
-      }
+      final shared = await sb
+          .from('ai_couple_summaries')
+          .select('summary,updated_at')
+          .eq('session_id', widget.sessionId)
+          .maybeSingle();
 
       final sharedRaw = shared?['summary'];
       final sharedParsed = _tryParseSummary(sharedRaw);
 
-      final status = shared?['status']?.toString();
-      final err = shared?['error_message']?.toString();
-      final upd = shared?['updated_at'];
-      DateTime? updDt;
-      if (upd is String) {
-        updDt = DateTime.tryParse(upd);
-      }
-
       if (!mounted) return;
-
-      // Always update shared status info if we got a row (even if summary is null)
-      if (shared != null) {
-        setState(() {
-          _aiSharedStatus = status;
-          _aiSharedErrorMessage = err;
-          _aiSharedUpdatedAt = updDt;
-        });
-      }
 
       if (sharedRaw != null && sharedRaw.toString().trim().isNotEmpty) {
         setState(() {
@@ -516,7 +482,7 @@ class _ResultsPageState extends State<ResultsPage> {
       // ignore and fallback to per-user
     }
 
-    // 2) Fallback to per-user summary (Pro-only historically)
+    // 2) Fallback to per-user summary (legacy)
     try {
       final row = await sb
           .from('ai_summaries')
@@ -536,16 +502,11 @@ class _ResultsPageState extends State<ResultsPage> {
       });
     } catch (e) {
       debugPrint('load ai summary failed: $e');
-    } finally {
-      // If shared says "generating" and we still don't have summary, start polling
-      if (mounted) {
-        _startAiPollingIfNeeded();
-      }
     }
   }
 
   /// ✅ Generates AI summary via Supabase Edge Function (Pro-only).
-  /// Handles 202 (someone else generating) by switching UI to "generating" + polling DB.
+  /// If it returns 202, we simply show "generating" UI and poll until it appears.
   Future<void> _generateAiSummary() async {
     if (_aiBusy) return;
 
@@ -576,7 +537,7 @@ class _ResultsPageState extends State<ResultsPage> {
 
     setState(() {
       _aiBusy = true;
-      _aiSharedErrorMessage = null;
+      _aiErrorMessage = null;
     });
 
     try {
@@ -587,24 +548,14 @@ class _ResultsPageState extends State<ResultsPage> {
         body: {'sessionId': widget.sessionId},
       );
 
-      // ✅ 202: another request is generating (lock held) -> poll DB
+      // 202: summary is generating somewhere (or lock held). We just poll.
       if (res.status == 202) {
-        await _loadAiSummaryFromDb(); // this might already become ready quickly
-
-        if (!mounted) return;
-
+        await _loadAiSummaryFromDb();
         if (_hasAiSummary) {
-          setState(() {
-            _aiSharedStatus = 'ready';
-          });
           _stopAiPolling();
-        } else {
-          setState(() {
-            _aiSharedStatus = 'generating';
-          });
-          _startAiPollingIfNeeded();
+          return;
         }
-
+        _startAiPollingAfterGenerate();
         return;
       }
 
@@ -613,11 +564,8 @@ class _ResultsPageState extends State<ResultsPage> {
       }
 
       final data = res.data;
-
       dynamic summaryCandidate;
-      if (data is Map) {
-        summaryCandidate = data['summary'];
-      }
+      if (data is Map) summaryCandidate = data['summary'];
 
       final parsed = _tryParseSummary(summaryCandidate);
 
@@ -627,7 +575,6 @@ class _ResultsPageState extends State<ResultsPage> {
           _aiSummaryIsShared = true; // function writes shared table too
           _aiSummaryJson = parsed;
           _aiSummaryRaw = null;
-          _aiSharedStatus = 'ready';
         });
         _stopAiPolling();
         return;
@@ -637,21 +584,15 @@ class _ResultsPageState extends State<ResultsPage> {
       await _loadAiSummaryFromDb();
 
       if (!_hasAiSummary) {
-        throw Exception('No summary returned from function');
+        // Start polling anyway (sometimes DB write arrives slightly after response)
+        _startAiPollingAfterGenerate();
       }
-
-      if (!mounted) return;
-      setState(() {
-        _aiSharedStatus = 'ready';
-      });
-      _stopAiPolling();
     } catch (e) {
       if (!mounted) return;
       debugPrint('ai_summary FunctionException: $e');
 
       setState(() {
-        _aiSharedStatus = 'error';
-        _aiSharedErrorMessage = e.toString();
+        _aiErrorMessage = e.toString();
       });
 
       ScaffoldMessenger.of(context).showSnackBar(
@@ -1130,6 +1071,31 @@ class _ResultsPageState extends State<ResultsPage> {
     ],
   };
 
+  Widget _aiGeneratingHint() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.black12),
+      ),
+      child: const Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Your summary is being generated…',
+            style: TextStyle(fontWeight: FontWeight.w800),
+          ),
+          SizedBox(height: 6),
+          Text(
+            'This usually takes a few seconds. You can stay here — it will appear automatically.',
+            style: TextStyle(color: Colors.black54),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_loading) {
@@ -1143,9 +1109,6 @@ class _ResultsPageState extends State<ResultsPage> {
     String listOrDash(List<String> items) => items.isEmpty ? '—' : items.join(', ');
 
     final mismatchLimit = _isPro ? 20 : 5;
-
-    final sharedStatus = (_aiSharedStatus ?? '').toLowerCase();
-    final showGeneratingHint = _finalReady && !_hasAiSummary && sharedStatus == 'generating';
 
     return Scaffold(
       appBar: AppBar(
@@ -1278,7 +1241,7 @@ class _ResultsPageState extends State<ResultsPage> {
                 const Divider(height: 1),
                 const SizedBox(height: 14),
 
-                // ✅ AI Summary block (shared view allowed)
+                // ✅ AI Summary (NO partner-generating messaging)
                 Row(
                   children: [
                     const Expanded(
@@ -1311,10 +1274,10 @@ class _ResultsPageState extends State<ResultsPage> {
                 else if (_hasAiSummary) ...[
                   if (_aiSummaryIsShared)
                     const Text(
-                      'Shared summary (generated by your partner or you).',
+                      'Shared summary (generated once for both).',
                       style: TextStyle(color: Colors.black54, fontSize: 12),
-                    ),
-                  if (!_aiSummaryIsShared)
+                    )
+                  else
                     const Text(
                       'Personal summary (legacy).',
                       style: TextStyle(color: Colors.black54, fontSize: 12),
@@ -1358,46 +1321,16 @@ class _ResultsPageState extends State<ResultsPage> {
                       ),
                     ],
                   ),
-                ] else if (showGeneratingHint) ...[
-                  Text(
-                    'Your summary is being generated…',
-                    style: const TextStyle(color: Colors.black87, fontWeight: FontWeight.w700),
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    'This usually takes a few seconds. You can stay here — it will appear automatically.',
-                    style: const TextStyle(color: Colors.black54),
-                  ),
-                  if ((_aiSharedUpdatedAt != null))
-                    Padding(
-                      padding: const EdgeInsets.only(top: 6),
-                      child: Text(
-                        'Last update: ${_aiSharedUpdatedAt!.toLocal().toIso8601String()}',
-                        style: const TextStyle(color: Colors.black45, fontSize: 12),
-                      ),
-                    ),
-                  const SizedBox(height: 10),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: ElevatedButton(
-                          onPressed: _aiBusy ? null : () async {
-                            await _loadAiSummaryFromDb();
-                            _startAiPollingIfNeeded();
-                          },
-                          child: const Text('Refresh now'),
-                        ),
-                      ),
-                    ],
-                  ),
-                ] else if (_aiSharedStatus == 'error' && (_aiSharedErrorMessage ?? '').isNotEmpty) ...[
+                ] else if (_aiBusy) ...[
+                  _aiGeneratingHint(),
+                ] else if ((_aiErrorMessage ?? '').isNotEmpty) ...[
                   const Text(
                     'AI summary failed to generate.',
                     style: TextStyle(color: Colors.black87, fontWeight: FontWeight.w700),
                   ),
                   const SizedBox(height: 6),
                   Text(
-                    _aiSharedErrorMessage!,
+                    _aiErrorMessage!,
                     style: const TextStyle(color: Colors.black54),
                   ),
                   const SizedBox(height: 12),
