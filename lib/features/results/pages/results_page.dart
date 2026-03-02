@@ -69,10 +69,16 @@ class _ResultsPageState extends State<ResultsPage> {
   // ✅ Track whether summary came from shared couple cache
   bool _aiSummaryIsShared = false;
 
-  // ✅ Simple error field for generation failures (no partner-status logic)
+  // ✅ Simple error field for generation failures (function / client errors)
   String? _aiErrorMessage;
 
-  // ✅ Poll after pressing generate so it appears automatically
+  // ✅ Shared table generation status (so partner sees "generating" too)
+  String? _aiSharedStatus; // generating | ready | error | null
+  String? _aiSharedError; // error_message from ai_couple_summaries
+
+  bool get _aiGeneratingFromDb => _aiSharedStatus == 'generating';
+
+  // ✅ Poll so it appears automatically
   Timer? _aiPollTimer;
   int _aiPollTicks = 0;
 
@@ -114,7 +120,7 @@ class _ResultsPageState extends State<ResultsPage> {
     RevenueCatService.instance.isPro.removeListener(_proListener);
 
     _reloadDebounce?.cancel();
-    _aiPollTimer?.cancel();
+    _stopAiPolling();
 
     final sb = Supabase.instance.client;
     if (_responsesChannel != null) sb.removeChannel(_responsesChannel!);
@@ -421,9 +427,36 @@ class _ResultsPageState extends State<ResultsPage> {
     _aiPollTicks = 0;
   }
 
+  /// ✅ Poll for BOTH users when DB says "generating"
+  void _startAiPollingWhenGenerating() {
+    if (!_finalReady) return;
+    if (_hasAiSummary) return;
+
+    if (_aiPollTimer != null) return;
+
+    _aiPollTicks = 0;
+    _aiPollTimer = Timer.periodic(const Duration(seconds: 2), (_) async {
+      _aiPollTicks += 1;
+
+      // Poll for up to ~60s
+      if (_aiPollTicks > 30) {
+        _stopAiPolling();
+        if (!mounted) return;
+        setState(() {});
+        return;
+      }
+
+      await _loadAiSummaryFromDb();
+
+      // Stop if ready or error
+      if (_hasAiSummary || _aiSharedStatus == 'error') {
+        _stopAiPolling();
+      }
+    });
+  }
+
   void _startAiPollingAfterGenerate() {
     // Poll only when:
-    // - this user started generation (_aiBusy true)
     // - final ready
     // - still no summary
     if (!_finalReady) return;
@@ -444,13 +477,13 @@ class _ResultsPageState extends State<ResultsPage> {
       }
 
       await _loadAiSummaryFromDb();
-      if (_hasAiSummary) {
+      if (_hasAiSummary || _aiSharedStatus == 'error') {
         _stopAiPolling();
       }
     });
   }
 
-  /// ✅ Loads shared couple summary first, then falls back to per-user ai_summaries.
+  /// ✅ Loads shared couple summary first (incl. status), then falls back to per-user ai_summaries.
   Future<void> _loadAiSummaryFromDb() async {
     final sb = Supabase.instance.client;
     final uid = sb.auth.currentUser?.id;
@@ -460,21 +493,47 @@ class _ResultsPageState extends State<ResultsPage> {
     try {
       final shared = await sb
           .from('ai_couple_summaries')
-          .select('summary,updated_at')
+          .select('summary,status,error_message,updated_at')
           .eq('session_id', widget.sessionId)
           .maybeSingle();
 
       final sharedRaw = shared?['summary'];
       final sharedParsed = _tryParseSummary(sharedRaw);
 
+      final sharedStatus = shared?['status']?.toString();
+      final sharedErr = shared?['error_message']?.toString();
+
+      final hasSharedSummary =
+          sharedRaw != null && sharedRaw.toString().trim().isNotEmpty;
+
       if (!mounted) return;
 
-      if (sharedRaw != null && sharedRaw.toString().trim().isNotEmpty) {
+      // Always capture status so partner can see "generating"
+      setState(() {
+        _aiSharedStatus = sharedStatus;
+        _aiSharedError =
+        (sharedErr != null && sharedErr.trim().isNotEmpty) ? sharedErr : null;
+      });
+
+      // If summary exists -> show it
+      if (hasSharedSummary) {
         setState(() {
           _aiSummaryIsShared = true;
           _aiSummaryJson = sharedParsed;
           _aiSummaryRaw = sharedParsed == null ? (sharedRaw.toString()) : null;
         });
+        _stopAiPolling();
+        return;
+      }
+
+      // If DB says generating -> show generating and poll (even for partner)
+      if (sharedStatus == 'generating') {
+        _startAiPollingWhenGenerating();
+        return;
+      }
+
+      // If DB says error -> show error (don't fall back to per-user)
+      if (sharedStatus == 'error') {
         _stopAiPolling();
         return;
       }
@@ -538,6 +597,8 @@ class _ResultsPageState extends State<ResultsPage> {
     setState(() {
       _aiBusy = true;
       _aiErrorMessage = null;
+      // clear DB error view when user retries
+      _aiSharedError = null;
     });
 
     try {
@@ -555,6 +616,7 @@ class _ResultsPageState extends State<ResultsPage> {
           _stopAiPolling();
           return;
         }
+        // Use the broader polling (works even if status update comes slightly later)
         _startAiPollingAfterGenerate();
         return;
       }
@@ -1110,6 +1172,12 @@ class _ResultsPageState extends State<ResultsPage> {
 
     final mismatchLimit = _isPro ? 20 : 5;
 
+    // Prefer DB error if present (shared table is the source of truth)
+    final effectiveAiError =
+    (_aiSharedStatus == 'error' && (_aiSharedError ?? '').trim().isNotEmpty)
+        ? _aiSharedError
+        : _aiErrorMessage;
+
     return Scaffold(
       appBar: AppBar(
         title: Text(_finalReady ? 'Results (Final)' : 'Results (Live)'),
@@ -1241,7 +1309,7 @@ class _ResultsPageState extends State<ResultsPage> {
                 const Divider(height: 1),
                 const SizedBox(height: 14),
 
-                // ✅ AI Summary (NO partner-generating messaging)
+                // ✅ AI Summary (now partner sees generating based on DB status)
                 Row(
                   children: [
                     const Expanded(
@@ -1321,16 +1389,16 @@ class _ResultsPageState extends State<ResultsPage> {
                       ),
                     ],
                   ),
-                ] else if (_aiBusy) ...[
+                ] else if (_aiBusy || _aiGeneratingFromDb) ...[
                   _aiGeneratingHint(),
-                ] else if ((_aiErrorMessage ?? '').isNotEmpty) ...[
+                ] else if ((effectiveAiError ?? '').isNotEmpty) ...[
                   const Text(
                     'AI summary failed to generate.',
                     style: TextStyle(color: Colors.black87, fontWeight: FontWeight.w700),
                   ),
                   const SizedBox(height: 6),
                   Text(
-                    _aiErrorMessage!,
+                    effectiveAiError!,
                     style: const TextStyle(color: Colors.black54),
                   ),
                   const SizedBox(height: 12),
