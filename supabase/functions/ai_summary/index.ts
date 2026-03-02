@@ -625,6 +625,7 @@ async function upsertCoupleSummary(opts: {
     prefer: "resolution=merge-duplicates,return=representation",
   };
 
+  // Keep minimal here for schema compatibility; status/error handled by patch with fallback.
   const body = JSON.stringify({
     session_id: sessionId,
     summary: summaryString,
@@ -922,12 +923,14 @@ serve(async (req) => {
 
     await logAiEvent({ supabaseUrl, serviceKey, sessionId, userId, event: "claimed" });
 
+    // ✅ IMPORTANT: force "generating" state + ensure summary is NULL (not empty string)
     await patchCoupleSummaryWithFallback({
       supabaseUrl,
       serviceKey,
       sessionId,
       patch: {
         status: "generating",
+        summary: null, // ✅ prevents partner from seeing empty string content
         error_message: null,
         generated_by: userId,
         updated_at: new Date().toISOString(),
@@ -996,7 +999,7 @@ serve(async (req) => {
       const status = first.lastErr?.status ?? 0;
       const raw = first.lastErr?.raw ?? null;
 
-      // ✅ NEW: if our request locally aborted (timeout/network), keep status generating + return 202
+      // ✅ If our request locally aborted (timeout/network), keep status generating + return 202
       if (status === 202) {
         await logAiEvent({
           supabaseUrl,
@@ -1013,6 +1016,7 @@ serve(async (req) => {
           sessionId,
           patch: {
             status: "generating",
+            summary: null, // ✅ keep it null while generating
             error_message: null,
             updated_at: new Date().toISOString(),
           },
@@ -1024,7 +1028,7 @@ serve(async (req) => {
         );
       }
 
-      // ✅ existing: Gemini quota/rate limit -> return 429 with retry info
+      // ✅ Gemini rate limit -> return 429 with retry info
       if (status === 429 && typeof raw === "string") {
         const retryAfterSeconds = extractRetryDelaySecondsFromGeminiError(raw) ?? 20;
 

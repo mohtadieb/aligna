@@ -46,6 +46,10 @@ class _ResultsPageState extends State<ResultsPage> {
 
   RealtimeChannel? _responsesChannel;
   RealtimeChannel? _sessionChannel;
+
+  // ✅ NEW: realtime for shared summary changes
+  RealtimeChannel? _aiCoupleChannel;
+
   Timer? _reloadDebounce;
 
   // ⚡ Performance: cache modules + questions (static content) so realtime reloads
@@ -125,6 +129,8 @@ class _ResultsPageState extends State<ResultsPage> {
     final sb = Supabase.instance.client;
     if (_responsesChannel != null) sb.removeChannel(_responsesChannel!);
     if (_sessionChannel != null) sb.removeChannel(_sessionChannel!);
+    if (_aiCoupleChannel != null) sb.removeChannel(_aiCoupleChannel!);
+
     super.dispose();
   }
 
@@ -272,6 +278,10 @@ class _ResultsPageState extends State<ResultsPage> {
       sb.removeChannel(_sessionChannel!);
       _sessionChannel = null;
     }
+    if (_aiCoupleChannel != null) {
+      sb.removeChannel(_aiCoupleChannel!);
+      _aiCoupleChannel = null;
+    }
 
     _responsesChannel = sb.channel('realtime:responses:${widget.sessionId}');
     _responsesChannel!
@@ -325,6 +335,24 @@ class _ResultsPageState extends State<ResultsPage> {
         _reloadDebounce = Timer(const Duration(milliseconds: 250), () {
           _load(silent: true);
         });
+      },
+    )
+        .subscribe();
+
+    // ✅ NEW: realtime updates for shared AI summary (partner sees it instantly)
+    _aiCoupleChannel = sb.channel('realtime:ai_couple_summaries:${widget.sessionId}');
+    _aiCoupleChannel!
+        .onPostgresChanges(
+      event: PostgresChangeEvent.all,
+      schema: 'public',
+      table: 'ai_couple_summaries',
+      filter: PostgresChangeFilter(
+        type: PostgresChangeFilterType.eq,
+        column: 'session_id',
+        value: widget.sessionId,
+      ),
+      callback: (_) {
+        _loadAiSummaryFromDb();
       },
     )
         .subscribe();
@@ -456,9 +484,6 @@ class _ResultsPageState extends State<ResultsPage> {
   }
 
   void _startAiPollingAfterGenerate() {
-    // Poll only when:
-    // - final ready
-    // - still no summary
     if (!_finalReady) return;
     if (_hasAiSummary) return;
 
@@ -500,40 +525,56 @@ class _ResultsPageState extends State<ResultsPage> {
       final sharedRaw = shared?['summary'];
       final sharedParsed = _tryParseSummary(sharedRaw);
 
-      final sharedStatus = shared?['status']?.toString();
+      final sharedStatusRaw = shared?['status']?.toString();
       final sharedErr = shared?['error_message']?.toString();
 
+      final rawText = (sharedRaw ?? '').toString().trim();
+
+      // ✅ Treat '{}' (placeholder) as "no summary"
       final hasSharedSummary =
-          sharedRaw != null && sharedRaw.toString().trim().isNotEmpty;
+          rawText.isNotEmpty && rawText != '{}' && rawText.toLowerCase() != 'null';
+
+      // ✅ Infer status if status is missing/unknown
+      String? inferredStatus;
+      if (shared == null) {
+        inferredStatus = null;
+      } else if (sharedStatusRaw == 'error' ||
+          sharedStatusRaw == 'ready' ||
+          sharedStatusRaw == 'generating') {
+        inferredStatus = sharedStatusRaw;
+      } else {
+        inferredStatus = hasSharedSummary ? 'ready' : 'generating';
+      }
 
       if (!mounted) return;
 
-      // Always capture status so partner can see "generating"
       setState(() {
-        _aiSharedStatus = sharedStatus;
+        _aiSharedStatus = inferredStatus;
         _aiSharedError =
         (sharedErr != null && sharedErr.trim().isNotEmpty) ? sharedErr : null;
       });
 
       // If summary exists -> show it
       if (hasSharedSummary) {
+        if (!mounted) return;
         setState(() {
           _aiSummaryIsShared = true;
           _aiSummaryJson = sharedParsed;
-          _aiSummaryRaw = sharedParsed == null ? (sharedRaw.toString()) : null;
+          // Only show raw if it's not '{}' and parsing failed
+          _aiSummaryRaw = (sharedParsed == null) ? rawText : null;
         });
         _stopAiPolling();
         return;
       }
 
       // If DB says generating -> show generating and poll (even for partner)
-      if (sharedStatus == 'generating') {
+      if (_aiSharedStatus == 'generating') {
         _startAiPollingWhenGenerating();
         return;
       }
 
       // If DB says error -> show error (don't fall back to per-user)
-      if (sharedStatus == 'error') {
+      if (_aiSharedStatus == 'error') {
         _stopAiPolling();
         return;
       }
@@ -552,12 +593,16 @@ class _ResultsPageState extends State<ResultsPage> {
 
       final raw = row?['summary'];
       final parsed = _tryParseSummary(raw);
+      final rawText = (raw ?? '').toString().trim();
 
       if (!mounted) return;
       setState(() {
         _aiSummaryIsShared = false;
         _aiSummaryJson = parsed;
-        _aiSummaryRaw = parsed == null ? (raw?.toString()) : null;
+        _aiSummaryRaw =
+        (parsed == null && rawText.isNotEmpty && rawText != '{}' && rawText.toLowerCase() != 'null')
+            ? rawText
+            : null;
       });
     } catch (e) {
       debugPrint('load ai summary failed: $e');
@@ -597,7 +642,6 @@ class _ResultsPageState extends State<ResultsPage> {
     setState(() {
       _aiBusy = true;
       _aiErrorMessage = null;
-      // clear DB error view when user retries
       _aiSharedError = null;
     });
 
@@ -616,7 +660,6 @@ class _ResultsPageState extends State<ResultsPage> {
           _stopAiPolling();
           return;
         }
-        // Use the broader polling (works even if status update comes slightly later)
         _startAiPollingAfterGenerate();
         return;
       }
@@ -634,7 +677,7 @@ class _ResultsPageState extends State<ResultsPage> {
       if (parsed != null) {
         if (!mounted) return;
         setState(() {
-          _aiSummaryIsShared = true; // function writes shared table too
+          _aiSummaryIsShared = true;
           _aiSummaryJson = parsed;
           _aiSummaryRaw = null;
         });
@@ -642,11 +685,9 @@ class _ResultsPageState extends State<ResultsPage> {
         return;
       }
 
-      // If function didn't return summary, it may still have saved to DB.
       await _loadAiSummaryFromDb();
 
       if (!_hasAiSummary) {
-        // Start polling anyway (sometimes DB write arrives slightly after response)
         _startAiPollingAfterGenerate();
       }
     } catch (e) {
@@ -675,7 +716,6 @@ class _ResultsPageState extends State<ResultsPage> {
       return;
     }
 
-    // Hard gate: DB truth
     if (!_hardPro) {
       await _openProPaywall();
       if (!_hardPro) {
@@ -1201,7 +1241,6 @@ class _ResultsPageState extends State<ResultsPage> {
           ),
           const SizedBox(height: 16),
 
-          // ✅ Overall + Insight + AI summary
           Container(
             padding: const EdgeInsets.all(14),
             decoration: BoxDecoration(
@@ -1309,7 +1348,6 @@ class _ResultsPageState extends State<ResultsPage> {
                 const Divider(height: 1),
                 const SizedBox(height: 14),
 
-                // ✅ AI Summary (now partner sees generating based on DB status)
                 Row(
                   children: [
                     const Expanded(
