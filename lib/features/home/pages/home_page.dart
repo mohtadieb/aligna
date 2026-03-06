@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:aligna/pages/settings_page.dart';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -430,6 +431,16 @@ class _HomePageState extends State<HomePage> {
             onPressed: () => _loadMySessions(showLoading: true),
             icon: const Icon(Icons.refresh),
             tooltip: 'Refresh',
+          ),
+          IconButton(
+            onPressed: () async {
+              await Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const SettingsPage()),
+              );
+            },
+            icon: const Icon(Icons.settings),
+            tooltip: 'Settings',
           ),
           IconButton(
             onPressed: _logout,
