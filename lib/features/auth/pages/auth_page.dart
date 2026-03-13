@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-import '../../home/pages/home_page.dart';
-
 class AuthPage extends StatefulWidget {
-  const AuthPage({super.key});
+  final bool initialIsLogin;
+
+  const AuthPage({
+    super.key,
+    this.initialIsLogin = true,
+  });
 
   @override
   State<AuthPage> createState() => _AuthPageState();
@@ -14,10 +17,33 @@ class _AuthPageState extends State<AuthPage> {
   final _email = TextEditingController();
   final _password = TextEditingController();
 
+  static const _brandGradient = LinearGradient(
+    colors: [
+      Color(0xFF7B5CF0),
+      Color(0xFFE96BD2),
+      Color(0xFFFFA96C),
+    ],
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+  );
+
+  static const _pageBg = Color(0xFFF8F5FF);
+  static const _cardBorder = Color(0xFFF0EAFB);
+  static const _primaryPurple = Color(0xFF6A42E8);
+  static const _softPurple = Color(0xFFF8F5FF);
+
   bool _loading = false;
-  bool _isLogin = true;
+  late bool _isLogin;
+  bool _obscurePassword = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _isLogin = widget.initialIsLogin;
+  }
 
   Future<void> _submit() async {
+    FocusScope.of(context).unfocus();
     setState(() => _loading = true);
 
     try {
@@ -28,26 +54,100 @@ class _AuthPageState extends State<AuthPage> {
       if (_isLogin) {
         await sb.auth.signInWithPassword(email: email, password: pass);
       } else {
-        // Create account
         await sb.auth.signUp(email: email, password: pass);
-
-        // IMPORTANT: sign up may not create a session if email confirmation is enabled,
-        // so we sign in right after.
         await sb.auth.signInWithPassword(email: email, password: pass);
       }
-
-      // No manual navigation needed anymore — AuthGate will swap screens.
     } on AuthException catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message)));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.message)),
+      );
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error: $e')),
+      );
     } finally {
       if (mounted) setState(() => _loading = false);
     }
   }
 
+  Widget _gradientButton({
+    required String text,
+    required VoidCallback? onPressed,
+    IconData? icon,
+  }) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        gradient: _brandGradient,
+        borderRadius: BorderRadius.circular(18),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF7B5CF0).withOpacity(0.18),
+            blurRadius: 18,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: ElevatedButton(
+        onPressed: onPressed,
+        style: ElevatedButton.styleFrom(
+          minimumSize: const Size.fromHeight(54),
+          backgroundColor: Colors.transparent,
+          shadowColor: Colors.transparent,
+          disabledBackgroundColor: Colors.transparent,
+          disabledForegroundColor: Colors.white70,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(18),
+          ),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            if (icon != null) ...[
+              Icon(icon, color: Colors.white),
+              const SizedBox(width: 8),
+            ],
+            Text(
+              text,
+              style: const TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w700,
+                color: Colors.white,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  InputDecoration _inputDecoration({
+    required String label,
+    required IconData icon,
+    Widget? suffixIcon,
+  }) {
+    return InputDecoration(
+      labelText: label,
+      prefixIcon: Icon(icon, color: _primaryPurple),
+      suffixIcon: suffixIcon,
+      filled: true,
+      fillColor: Colors.white,
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(18),
+        borderSide: const BorderSide(color: _cardBorder),
+      ),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(18),
+        borderSide: const BorderSide(color: _cardBorder),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(18),
+        borderSide: const BorderSide(color: _primaryPurple, width: 1.4),
+      ),
+    );
+  }
 
   @override
   void dispose() {
@@ -59,41 +159,179 @@ class _AuthPageState extends State<AuthPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Aligna')),
-      body: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
+      backgroundColor: _pageBg,
+      body: SafeArea(
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
           children: [
-            TextField(
-              controller: _email,
-              decoration: const InputDecoration(labelText: 'Email'),
-              keyboardType: TextInputType.emailAddress,
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _password,
-              decoration: const InputDecoration(labelText: 'Password'),
-              obscureText: true,
-            ),
-            const SizedBox(height: 16),
-            SizedBox(
-              width: double.infinity,
-              height: 48,
-              child: ElevatedButton(
-                onPressed: _loading ? null : _submit,
-                child: Text(_loading
-                    ? 'Please wait...'
-                    : (_isLogin ? 'Login' : 'Create account')),
+            const SizedBox(height: 8),
+            Center(
+              child: Image.asset(
+                'assets/icon/aligna_inapp_icon.png',
+                height: 74,
               ),
             ),
-            const SizedBox(height: 10),
-            TextButton(
-              onPressed: _loading
-                  ? null
-                  : () => setState(() => _isLogin = !_isLogin),
-              child: Text(_isLogin
-                  ? 'No account? Create one'
-                  : 'Have an account? Login'),
+            const SizedBox(height: 20),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(22),
+              decoration: BoxDecoration(
+                gradient: _brandGradient,
+                borderRadius: BorderRadius.circular(30),
+                boxShadow: [
+                  BoxShadow(
+                    color: const Color(0xFF7B5CF0).withOpacity(0.18),
+                    blurRadius: 28,
+                    offset: const Offset(0, 12),
+                  ),
+                ],
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    _isLogin ? 'Welcome back\nto Aligna' : 'Create your\nAligna account',
+                    style: const TextStyle(
+                      fontSize: 30,
+                      height: 1.1,
+                      fontWeight: FontWeight.w800,
+                      color: Colors.white,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Text(
+                    _isLogin
+                        ? 'Log in to continue your sessions, modules, and results.'
+                        : 'Start discovering your relationship compatibility with a beautifully guided experience.',
+                    style: const TextStyle(
+                      fontSize: 15,
+                      height: 1.4,
+                      color: Colors.white,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 18),
+            Container(
+              padding: const EdgeInsets.all(18),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(24),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.05),
+                    blurRadius: 24,
+                    offset: const Offset(0, 10),
+                  ),
+                ],
+                border: Border.all(color: _cardBorder),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    _isLogin ? 'Log in' : 'Create account',
+                    style: const TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    _isLogin
+                        ? 'Enter your details to access your account.'
+                        : 'Use your email and password to get started.',
+                    style: const TextStyle(
+                      color: Colors.black54,
+                      height: 1.35,
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+                  TextField(
+                    controller: _email,
+                    decoration: _inputDecoration(
+                      label: 'Email',
+                      icon: Icons.mail_outline_rounded,
+                    ),
+                    keyboardType: TextInputType.emailAddress,
+                    textInputAction: TextInputAction.next,
+                    autofillHints: const [AutofillHints.email],
+                  ),
+                  const SizedBox(height: 14),
+                  TextField(
+                    controller: _password,
+                    decoration: _inputDecoration(
+                      label: 'Password',
+                      icon: Icons.lock_outline_rounded,
+                      suffixIcon: IconButton(
+                        onPressed: () {
+                          setState(() {
+                            _obscurePassword = !_obscurePassword;
+                          });
+                        },
+                        icon: Icon(
+                          _obscurePassword
+                              ? Icons.visibility_off_rounded
+                              : Icons.visibility_rounded,
+                          color: Colors.black45,
+                        ),
+                      ),
+                    ),
+                    obscureText: _obscurePassword,
+                    textInputAction: TextInputAction.done,
+                    autofillHints: const [AutofillHints.password],
+                    onSubmitted: (_) {
+                      if (!_loading) _submit();
+                    },
+                  ),
+                  const SizedBox(height: 18),
+                  _gradientButton(
+                    text: _loading
+                        ? 'Please wait...'
+                        : (_isLogin ? 'Login' : 'Create account'),
+                    onPressed: _loading ? null : _submit,
+                    icon: _isLogin
+                        ? Icons.login_rounded
+                        : Icons.person_add_alt_1_rounded,
+                  ),
+                  const SizedBox(height: 12),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      color: _softPurple,
+                      borderRadius: BorderRadius.circular(18),
+                    ),
+                    child: Text(
+                      _isLogin
+                          ? 'New here? Create an account to save your progress and view results anytime.'
+                          : 'Already have an account? You can log in instead.',
+                      style: const TextStyle(
+                        color: Colors.black54,
+                        height: 1.35,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Center(
+                    child: TextButton(
+                      onPressed: _loading
+                          ? null
+                          : () => setState(() => _isLogin = !_isLogin),
+                      child: Text(
+                        _isLogin
+                            ? 'No account? Create one'
+                            : 'Have an account? Login',
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w700,
+                          color: _primaryPurple,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ],
         ),

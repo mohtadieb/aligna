@@ -31,6 +31,22 @@ class _ResultsPageState extends State<ResultsPage> {
   final _sessionService = SessionService();
   final _resultsService = ResultsService();
 
+  static const _brandGradient = LinearGradient(
+    colors: [
+      Color(0xFF7B5CF0),
+      Color(0xFFE96BD2),
+      Color(0xFFFFA96C),
+    ],
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+  );
+
+  static const _pageBg = Color(0xFFF8F5FF);
+  static const _cardBorder = Color(0xFFF0EAFB);
+  static const _primaryPurple = Color(0xFF6A42E8);
+  static const _softPurple = Color(0xFFF8F5FF);
+  static const _softPink = Color(0xFFFFF4FB);
+
   bool _loading = true;
 
   Map<String, dynamic>? _session;
@@ -85,6 +101,175 @@ class _ResultsPageState extends State<ResultsPage> {
   // ✅ Poll so it appears automatically
   Timer? _aiPollTimer;
   int _aiPollTicks = 0;
+
+  Widget _gradientButton({
+    required String text,
+    required VoidCallback? onPressed,
+    IconData? icon,
+  }) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        gradient: _brandGradient,
+        borderRadius: BorderRadius.circular(18),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF7B5CF0).withOpacity(0.18),
+            blurRadius: 18,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: ElevatedButton.icon(
+        onPressed: onPressed,
+        icon: icon == null ? const SizedBox.shrink() : Icon(icon, color: Colors.white),
+        label: Text(
+          text,
+          style: const TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.w700,
+            color: Colors.white,
+          ),
+        ),
+        style: ElevatedButton.styleFrom(
+          minimumSize: const Size.fromHeight(52),
+          backgroundColor: Colors.transparent,
+          shadowColor: Colors.transparent,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(18),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _outlineButton({
+    required String text,
+    required VoidCallback? onPressed,
+    IconData? icon,
+  }) {
+    return OutlinedButton.icon(
+      onPressed: onPressed,
+      icon: icon == null
+          ? const SizedBox.shrink()
+          : Icon(icon, color: _primaryPurple),
+      label: Text(
+        text,
+        style: const TextStyle(
+          fontSize: 16,
+          fontWeight: FontWeight.w700,
+          color: _primaryPurple,
+        ),
+      ),
+      style: OutlinedButton.styleFrom(
+        minimumSize: const Size.fromHeight(52),
+        backgroundColor: Colors.white,
+        side: const BorderSide(color: _cardBorder),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(18),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildHeroCard({
+    required double? overall,
+    required bool partnerJoined,
+    required bool finalReady,
+  }) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        gradient: _brandGradient,
+        borderRadius: BorderRadius.circular(28),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF7B5CF0).withOpacity(0.18),
+            blurRadius: 28,
+            offset: const Offset(0, 12),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            finalReady ? 'Your final\nrelationship results' : 'Your live\nrelationship results',
+            style: const TextStyle(
+              fontSize: 28,
+              height: 1.1,
+              fontWeight: FontWeight.w800,
+              color: Colors.white,
+            ),
+          ),
+          const SizedBox(height: 10),
+          Text(
+            !partnerJoined
+                ? 'Waiting for your partner to join before full compatibility insights appear.'
+                : finalReady
+                ? 'Your final compatibility breakdown is ready to explore.'
+                : 'Your results update automatically as both of you answer more questions.',
+            style: const TextStyle(
+              fontSize: 15,
+              height: 1.4,
+              color: Colors.white,
+            ),
+          ),
+          const SizedBox(height: 18),
+          Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.16),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: Colors.white.withOpacity(0.18)),
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Overall compatibility',
+                        style: TextStyle(
+                          color: Colors.white70,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        overall == null ? '—' : '${overall.toStringAsFixed(0)}%',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 26,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                  child: Text(
+                    finalReady ? 'Final' : 'Live',
+                    style: const TextStyle(
+                      color: _primaryPurple,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 
   @override
   void initState() {
@@ -1176,10 +1361,11 @@ class _ResultsPageState extends State<ResultsPage> {
   Widget _aiGeneratingHint() {
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: Colors.black12),
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: _cardBorder),
       ),
       child: const Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1202,6 +1388,7 @@ class _ResultsPageState extends State<ResultsPage> {
   Widget build(BuildContext context) {
     if (_loading) {
       return const Scaffold(
+        backgroundColor: _pageBg,
         body: Center(child: CircularProgressIndicator()),
       );
     }
@@ -1212,26 +1399,55 @@ class _ResultsPageState extends State<ResultsPage> {
 
     final mismatchLimit = _isPro ? 20 : 5;
 
-    // Prefer DB error if present (shared table is the source of truth)
     final effectiveAiError =
     (_aiSharedStatus == 'error' && (_aiSharedError ?? '').trim().isNotEmpty)
         ? _aiSharedError
         : _aiErrorMessage;
 
     return Scaffold(
+      backgroundColor: _pageBg,
       appBar: AppBar(
-        title: Text(_finalReady ? 'Results (Final)' : 'Results (Live)'),
+        backgroundColor: _pageBg,
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        title: Row(
+          children: [
+            Image.asset(
+              'assets/icon/aligna_inapp_icon.png',
+              height: 28,
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                _finalReady ? 'Results' : 'Live Results',
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  fontWeight: FontWeight.w800,
+                  color: Colors.black,
+                ),
+              ),
+            ),
+          ],
+        ),
         actions: [
           IconButton(
-            onPressed: () => _load(),
-            icon: const Icon(Icons.refresh),
+            onPressed: _load,
+            icon: const Icon(Icons.refresh_rounded),
             tooltip: 'Refresh',
           ),
         ],
       ),
       body: ListView(
-        padding: const EdgeInsets.all(16),
+        physics: const BouncingScrollPhysics(),
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
         children: [
+          _buildHeroCard(
+            overall: overall,
+            partnerJoined: _partnerJoined,
+            finalReady: _finalReady,
+          ),
+          const SizedBox(height: 14),
+
           _StatusCard(
             partnerJoined: _partnerJoined,
             total: _totalQuestions,
@@ -1239,178 +1455,174 @@ class _ResultsPageState extends State<ResultsPage> {
             partnerCount: _partnerCount,
             finalReady: _finalReady,
           ),
+
           const SizedBox(height: 16),
 
           Container(
-            padding: const EdgeInsets.all(14),
+            padding: const EdgeInsets.all(18),
             decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: Colors.black12),
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(24),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.05),
+                  blurRadius: 24,
+                  offset: const Offset(0, 10),
+                ),
+              ],
+              border: Border.all(color: _cardBorder),
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const Text(
-                  'Overall compatibility',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+                  'Quick insight',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
                 ),
-                const SizedBox(height: 10),
-                if (!_partnerJoined)
-                  const Text(
-                    'Waiting for partner to join to calculate compatibility.',
-                    style: TextStyle(color: Colors.black54),
-                  )
-                else if (overall == null)
-                  const Text(
-                    'Not enough shared answers yet.',
-                    style: TextStyle(color: Colors.black54),
-                  )
-                else
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          '${overall.toStringAsFixed(0)}%',
-                          style: const TextStyle(
-                            fontSize: 28,
-                            fontWeight: FontWeight.w900,
-                          ),
-                        ),
-                      ),
-                      SizedBox(
-                        width: 120,
-                        child: ClipRRect(
-                          borderRadius: BorderRadius.circular(999),
-                          child: LinearProgressIndicator(
-                            value: (overall / 100).clamp(0, 1),
-                            minHeight: 10,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                const SizedBox(height: 14),
-                const Divider(height: 1),
-                const SizedBox(height: 14),
-
-                Row(
-                  children: [
-                    const Expanded(
-                      child: Text(
-                        'Quick insight',
-                        style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800),
-                      ),
-                    ),
-                    if (!_isPro)
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(999),
-                          border: Border.all(color: Colors.black12),
-                        ),
-                        child: const Text(
-                          'Pro',
-                          style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
-                        ),
-                      ),
-                  ],
-                ),
-                const SizedBox(height: 10),
+                const SizedBox(height: 12),
 
                 if (!_partnerJoined || overall == null)
-                  const Text(
-                    'Answer more questions together to unlock insights.',
-                    style: TextStyle(color: Colors.black54),
+                  Container(
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      color: _softPurple,
+                      borderRadius: BorderRadius.circular(18),
+                    ),
+                    child: const Text(
+                      'Answer more questions together to unlock insights.',
+                      style: TextStyle(color: Colors.black54),
+                    ),
                   )
                 else if (_isPro) ...[
-                  Text('🟢 Strong alignment in: ${listOrDash(buckets.strong)}'),
-                  const SizedBox(height: 6),
-                  Text('🟡 Moderate alignment in: ${listOrDash(buckets.moderate)}'),
-                  const SizedBox(height: 6),
-                  Text('🔴 Major differences in: ${listOrDash(buckets.major)}'),
+                  _InsightLine(
+                    icon: Icons.favorite_rounded,
+                    text: 'Strong alignment in: ${listOrDash(buckets.strong)}',
+                    bg: const Color(0xFFEFFAF3),
+                  ),
+                  const SizedBox(height: 10),
+                  _InsightLine(
+                    icon: Icons.balance_rounded,
+                    text: 'Moderate alignment in: ${listOrDash(buckets.moderate)}',
+                    bg: const Color(0xFFFFF8E8),
+                  ),
+                  const SizedBox(height: 10),
+                  _InsightLine(
+                    icon: Icons.priority_high_rounded,
+                    text: 'Major differences in: ${listOrDash(buckets.major)}',
+                    bg: const Color(0xFFFFF0F3),
+                  ),
                 ] else ...[
-                  const Text(
-                    'Unlock Pro to see deep insights across modules.',
-                    style: TextStyle(color: Colors.black54),
+                  Container(
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      color: _softPurple,
+                      borderRadius: BorderRadius.circular(18),
+                    ),
+                    child: const Text(
+                      'Unlock Pro to see deeper insight across your modules.',
+                      style: TextStyle(color: Colors.black54),
+                    ),
                   ),
                   const SizedBox(height: 12),
-                  SizedBox(
-                    width: double.infinity,
-                    height: 44,
-                    child: ElevatedButton(
-                      onPressed: _openProPaywall,
-                      child: const Text('Unlock Pro'),
-                    ),
+                  _gradientButton(
+                    text: 'Unlock Pro',
+                    onPressed: _openProPaywall,
+                    icon: Icons.auto_awesome_rounded,
                   ),
                 ],
 
-                const SizedBox(height: 14),
+                const SizedBox(height: 18),
                 const Divider(height: 1),
-                const SizedBox(height: 14),
+                const SizedBox(height: 18),
 
                 Row(
                   children: [
                     const Expanded(
                       child: Text(
                         'AI Summary',
-                        style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800),
+                        style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
                       ),
                     ),
                     if (!_hasAiSummary && !_isPro)
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                         decoration: BoxDecoration(
+                          color: _softPink,
                           borderRadius: BorderRadius.circular(999),
-                          border: Border.all(color: Colors.black12),
                         ),
                         child: const Text(
                           'Pro',
-                          style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                            color: _primaryPurple,
+                          ),
                         ),
                       ),
                   ],
                 ),
-                const SizedBox(height: 10),
+                const SizedBox(height: 12),
 
                 if (!_finalReady)
-                  const Text(
-                    'AI summary unlocks when final results are ready.',
-                    style: TextStyle(color: Colors.black54),
+                  Container(
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      color: _softPurple,
+                      borderRadius: BorderRadius.circular(18),
+                    ),
+                    child: const Text(
+                      'AI summary unlocks when final results are ready.',
+                      style: TextStyle(color: Colors.black54),
+                    ),
                   )
                 else if (_hasAiSummary) ...[
                   if (_aiSummaryIsShared)
-                    const Text(
-                      'Shared summary (generated once for both).',
-                      style: TextStyle(color: Colors.black54, fontSize: 12),
-                    )
-                  else
-                    const Text(
-                      'Personal summary (legacy).',
-                      style: TextStyle(color: Colors.black54, fontSize: 12),
+                    const Padding(
+                      padding: EdgeInsets.only(bottom: 8),
+                      child: Text(
+                        'Shared summary for both of you.',
+                        style: TextStyle(
+                          color: Colors.black54,
+                          fontSize: 12,
+                        ),
+                      ),
                     ),
-                  const SizedBox(height: 8),
                   Container(
                     width: double.infinity,
-                    padding: const EdgeInsets.all(12),
+                    padding: const EdgeInsets.all(14),
                     decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(14),
-                      border: Border.all(color: Colors.black12),
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(18),
+                      border: Border.all(color: _cardBorder),
                     ),
                     child: _aiSummaryJson != null
                         ? _AiSummaryView(json: _aiSummaryJson!)
-                        : Text(_aiSummaryRaw ?? '', style: const TextStyle(color: Colors.black87)),
+                        : Text(
+                      _aiSummaryRaw ?? '',
+                      style: const TextStyle(color: Colors.black87),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  const Text(
+                    'AI-generated insights are based on the answers provided and are intended for informational purposes only. They should not be considered professional relationship advice.',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Colors.black54,
+                    ),
                   ),
                   const SizedBox(height: 8),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.end,
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    alignment: WrapAlignment.end,
                     children: [
-                      TextButton.icon(
+                      _outlineButton(
+                        text: 'Refresh',
                         onPressed: _aiBusy ? null : _loadAiSummaryFromDb,
-                        icon: const Icon(Icons.refresh, size: 18),
-                        label: const Text('Refresh'),
+                        icon: Icons.refresh_rounded,
                       ),
-                      const SizedBox(width: 6),
-                      TextButton.icon(
+                      _outlineButton(
+                        text: 'Copy',
                         onPressed: () async {
                           final text = _aiSummaryJson != null
                               ? const JsonEncoder.withIndent('  ').convert(_aiSummaryJson)
@@ -1422,76 +1634,79 @@ class _ResultsPageState extends State<ResultsPage> {
                             const SnackBar(content: Text('Summary copied')),
                           );
                         },
-                        icon: const Icon(Icons.copy, size: 18),
-                        label: const Text('Copy'),
+                        icon: Icons.copy_rounded,
                       ),
                     ],
                   ),
                 ] else if (_aiBusy || _aiGeneratingFromDb) ...[
                   _aiGeneratingHint(),
                 ] else if ((effectiveAiError ?? '').isNotEmpty) ...[
-                  const Text(
-                    'AI summary failed to generate.',
-                    style: TextStyle(color: Colors.black87, fontWeight: FontWeight.w700),
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    effectiveAiError!,
-                    style: const TextStyle(color: Colors.black54),
+                  Container(
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFFF0F3),
+                      borderRadius: BorderRadius.circular(18),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'AI summary failed to generate.',
+                          style: TextStyle(
+                            color: Colors.black87,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          effectiveAiError!,
+                          style: const TextStyle(color: Colors.black54),
+                        ),
+                      ],
+                    ),
                   ),
                   const SizedBox(height: 12),
-                  if (_isPro)
-                    SizedBox(
-                      width: double.infinity,
-                      height: 44,
-                      child: ElevatedButton(
-                        onPressed: _aiBusy ? null : _generateAiSummary,
-                        child: Text(_aiBusy ? 'Generating…' : 'Try again'),
-                      ),
-                    )
-                  else
-                    SizedBox(
-                      width: double.infinity,
-                      height: 44,
-                      child: ElevatedButton(
-                        onPressed: _openProPaywall,
-                        child: const Text('Unlock Pro'),
-                      ),
-                    ),
+                  _gradientButton(
+                    text: _isPro ? (_aiBusy ? 'Generating…' : 'Try again') : 'Unlock Pro',
+                    onPressed: _isPro ? (_aiBusy ? null : _generateAiSummary) : _openProPaywall,
+                    icon: _isPro ? Icons.refresh_rounded : Icons.auto_awesome_rounded,
+                  ),
                 ] else if (!_isPro) ...[
-                  const Text(
-                    'Unlock Pro to generate an AI summary of your compatibility.',
-                    style: TextStyle(color: Colors.black54),
+                  Container(
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      color: _softPurple,
+                      borderRadius: BorderRadius.circular(18),
+                    ),
+                    child: const Text(
+                      'Unlock Pro to generate an AI summary of your compatibility.',
+                      style: TextStyle(color: Colors.black54),
+                    ),
                   ),
                   const SizedBox(height: 12),
-                  SizedBox(
-                    width: double.infinity,
-                    height: 44,
-                    child: ElevatedButton(
-                      onPressed: _openProPaywall,
-                      child: const Text('Unlock Pro'),
-                    ),
+                  _gradientButton(
+                    text: 'Unlock Pro',
+                    onPressed: _openProPaywall,
+                    icon: Icons.auto_awesome_rounded,
                   ),
                 ] else ...[
-                  SizedBox(
-                    width: double.infinity,
-                    height: 44,
-                    child: ElevatedButton(
-                      onPressed: _aiBusy ? null : _generateAiSummary,
-                      child: Text(_aiBusy ? 'Generating…' : 'Generate summary'),
-                    ),
+                  _gradientButton(
+                    text: _aiBusy ? 'Generating…' : 'Generate summary',
+                    onPressed: _aiBusy ? null : _generateAiSummary,
+                    icon: Icons.auto_awesome_rounded,
                   ),
                 ],
               ],
             ),
           ),
 
-          const SizedBox(height: 16),
+          const SizedBox(height: 18),
           const Text(
             'Module scores',
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+            style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
           ),
           const SizedBox(height: 10),
+
           ..._modules.map((m) {
             final moduleId = m['id'] as String;
             final title = m['title'] as String;
@@ -1507,25 +1722,32 @@ class _ResultsPageState extends State<ResultsPage> {
                 scoreLabel: label,
                 progress: score == null ? null : (score / 100.0),
                 subtitle: _partnerJoined
-                    ? (_finalReady ? 'Final' : 'Live (updates automatically)')
+                    ? (_finalReady ? 'Final result' : 'Live result')
                     : 'Waiting for partner to join',
               ),
             );
           }),
 
           const SizedBox(height: 18),
+
           Row(
             children: [
               const Expanded(
                 child: Text(
                   'Top mismatches',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
                 ),
               ),
               if (!_isPro)
                 TextButton(
                   onPressed: _openProPaywall,
-                  child: const Text('Unlock full'),
+                  child: const Text(
+                    'Unlock full',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w700,
+                      color: _primaryPurple,
+                    ),
+                  ),
                 ),
             ],
           ),
@@ -1550,19 +1772,16 @@ class _ResultsPageState extends State<ResultsPage> {
           const SizedBox(height: 24),
 
           if (_finalReady) ...[
-            SizedBox(
-              height: 48,
-              width: double.infinity,
-              child: ElevatedButton(
-                onPressed: () async {
-                  await _refreshDbPro();
-                  if (!mounted) return;
-                  await _exportFinalPdf();
-                },
-                child: Text(
-                  !_dbProReady ? 'Checking…' : (_hardPro ? 'Export Final Report (PDF)' : 'Unlock Pro to Export'),
-                ),
-              ),
+            _gradientButton(
+              text: !_dbProReady
+                  ? 'Checking…'
+                  : (_hardPro ? 'Export Final Report (PDF)' : 'Unlock Pro to Export'),
+              onPressed: () async {
+                await _refreshDbPro();
+                if (!mounted) return;
+                await _exportFinalPdf();
+              },
+              icon: Icons.picture_as_pdf_rounded,
             ),
             const SizedBox(height: 8),
             Text(
@@ -1652,29 +1871,39 @@ class _StatusCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.all(14),
+      padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.black12),
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(24),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.05),
+            blurRadius: 24,
+            offset: const Offset(0, 10),
+          ),
+        ],
+        border: Border.all(color: const Color(0xFFF0EAFB)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            finalReady ? 'Final results ready ✅' : 'Live results',
-            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+            finalReady ? 'Final results ready' : 'Live progress',
+            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
           ),
-          const SizedBox(height: 8),
-          Text('You: $myCount / $total'),
-          const SizedBox(height: 4),
-          Text(partnerJoined ? 'Partner: $partnerCount / $total' : 'Partner: not joined yet'),
-          const SizedBox(height: 10),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(999),
-            child: LinearProgressIndicator(
-              value: total == 0 ? 0 : (myCount / total).clamp(0, 1),
-              minHeight: 8,
-            ),
+          const SizedBox(height: 14),
+          _MiniProgressRow(
+            label: 'You',
+            value: total == 0 ? 0 : (myCount / total).clamp(0, 1),
+            text: '$myCount / $total answered',
+            color: const Color(0xFF7B5CF0),
+          ),
+          const SizedBox(height: 14),
+          _MiniProgressRow(
+            label: 'Partner',
+            value: !partnerJoined || total == 0 ? 0 : (partnerCount / total).clamp(0, 1),
+            text: partnerJoined ? '$partnerCount / $total answered' : 'Not joined yet',
+            color: const Color(0xFFE96BD2),
           ),
         ],
       ),
@@ -1698,10 +1927,18 @@ class _ModuleScoreTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.all(14),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.black12),
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(22),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.04),
+            blurRadius: 18,
+            offset: const Offset(0, 8),
+          ),
+        ],
+        border: Border.all(color: const Color(0xFFF0EAFB)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1716,19 +1953,31 @@ class _ModuleScoreTile extends StatelessWidget {
               ),
               Text(
                 scoreLabel,
-                style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w800),
+                style: const TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w900,
+                  color: Color(0xFF6A42E8),
+                ),
               ),
             ],
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 10),
           if (progress != null)
             ClipRRect(
               borderRadius: BorderRadius.circular(999),
-              child: LinearProgressIndicator(value: progress, minHeight: 8),
+              child: LinearProgressIndicator(
+                value: progress,
+                minHeight: 10,
+                backgroundColor: const Color(0xFFF0EAFB),
+                valueColor: const AlwaysStoppedAnimation(Color(0xFF7B5CF0)),
+              ),
             )
           else
-            const Text('Not enough shared answers yet', style: TextStyle(color: Colors.black54)),
-          const SizedBox(height: 6),
+            const Text(
+              'Not enough shared answers yet',
+              style: TextStyle(color: Colors.black54),
+            ),
+          const SizedBox(height: 8),
           Text(subtitle, style: const TextStyle(color: Colors.black54)),
         ],
       ),
@@ -1745,10 +1994,11 @@ class _AnswerChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.all(10),
+      padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: Colors.black12),
+        color: const Color(0xFFF8F5FF),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFFF0EAFB)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1761,8 +2011,11 @@ class _AnswerChip extends StatelessWidget {
               fontWeight: FontWeight.w600,
             ),
           ),
-          const SizedBox(height: 4),
-          Text(value, style: const TextStyle(fontWeight: FontWeight.w700)),
+          const SizedBox(height: 6),
+          Text(
+            value,
+            style: const TextStyle(fontWeight: FontWeight.w700),
+          ),
         ],
       ),
     );
@@ -1776,12 +2029,16 @@ class _EmptyHint extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.all(14),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.black12),
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: const Color(0xFFF0EAFB)),
       ),
-      child: Text(text, style: const TextStyle(color: Colors.black54)),
+      child: Text(
+        text,
+        style: const TextStyle(color: Colors.black54),
+      ),
     );
   }
 }
@@ -1800,4 +2057,86 @@ class _MismatchEntry {
     required this.partnerAnswer,
     required this.severity,
   });
+}
+
+class _MiniProgressRow extends StatelessWidget {
+  final String label;
+  final double value;
+  final String text;
+  final Color color;
+
+  const _MiniProgressRow({
+    required this.label,
+    required this.value,
+    required this.text,
+    required this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: const TextStyle(fontWeight: FontWeight.w700),
+        ),
+        const SizedBox(height: 6),
+        Text(
+          text,
+          style: const TextStyle(color: Colors.black54),
+        ),
+        const SizedBox(height: 8),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(999),
+          child: LinearProgressIndicator(
+            value: value,
+            minHeight: 10,
+            backgroundColor: const Color(0xFFF0EAFB),
+            valueColor: AlwaysStoppedAnimation(color),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _InsightLine extends StatelessWidget {
+  final IconData icon;
+  final String text;
+  final Color bg;
+
+  const _InsightLine({
+    required this.icon,
+    required this.text,
+    required this.bg,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(18),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, size: 18, color: const Color(0xFF6A42E8)),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              text,
+              style: const TextStyle(
+                height: 1.35,
+                color: Colors.black87,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }

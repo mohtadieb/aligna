@@ -1,4 +1,4 @@
-package com.example.aligna
+package com.joinaligna.app
 
 import io.flutter.embedding.android.FlutterFragmentActivity
 

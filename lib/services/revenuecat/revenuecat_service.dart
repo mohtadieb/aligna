@@ -10,8 +10,8 @@ class RevenueCatService {
   static const String entitlementId = 'aligna_pro';
 
   // ✅ RevenueCat public SDK keys
-  static const String _androidKey = 'test_SCJkyqEfQqDuuCxFkdryDKtDrBF';
-  static const String _iosKey = 'test_SCJkyqEfQqDuuCxFkdryDKtDrBF';
+  static const String _androidKey = 'goog_LUZyQFBXffRkeGgynKOBLjpJGoT';
+  // static const String _iosKey = 'test_SCJkyqEfQqDuuCxFkdryDKtDrBF';
 
   /// True only after we've finished at least 1 RC refresh for the current auth state.
   /// UI can use this to avoid "Unlock Pro" flicker.
@@ -46,7 +46,8 @@ class RevenueCatService {
     // We're about to refresh for this user
     isReady.value = false;
 
-    final apiKey = Platform.isAndroid ? _androidKey : _iosKey;
+    // final apiKey = Platform.isAndroid ? _androidKey : _iosKey;
+    final apiKey = _androidKey;
 
     // First-time configure
     if (!_configured) {

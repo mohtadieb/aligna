@@ -2,14 +2,13 @@ import 'dart:async';
 
 import 'package:app_links/app_links.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'features/auth/pages/auth_page.dart';
 import 'features/home/pages/home_page.dart';
+import 'features/onboarding/pages/onboarding_page.dart';
 import 'features/sessions/pages/join_session_page.dart';
-
-// ✅ RevenueCat bootstrap
 import 'services/revenuecat/revenuecat_service.dart';
 
 class AlignaApp extends StatefulWidget {
@@ -37,7 +36,6 @@ class _AlignaAppState extends State<AlignaApp> {
   }
 
   Future<void> _initDeepLinks() async {
-    // Handle cold start
     try {
       final initial = await _appLinks.getInitialLink();
       if (initial != null) {
@@ -45,18 +43,13 @@ class _AlignaAppState extends State<AlignaApp> {
       }
     } catch (_) {}
 
-    // Handle while running
     _sub = _appLinks.uriLinkStream.listen((uri) {
       _handleUri(uri);
     });
   }
 
   void _handleUri(Uri uri) {
-    // Accept:
-    // aligna://invite/AL-XXXX
-    // aligna://invite?code=AL-XXXX
-
-    if (uri.scheme != 'aligna') return;
+    if (uri.scheme != 'app') return;
 
     String? code;
 
@@ -94,15 +87,64 @@ class _AlignaAppState extends State<AlignaApp> {
   }
 }
 
-class _RootGate extends StatelessWidget {
+class _RootGate extends StatefulWidget {
   const _RootGate();
 
   @override
+  State<_RootGate> createState() => _RootGateState();
+}
+
+class _RootGateState extends State<_RootGate> {
+  bool? _seenOnboarding;
+  bool _prefillRegister = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadFlags();
+  }
+
+  Future<void> _loadFlags() async {
+    final prefs = await SharedPreferences.getInstance();
+    final seen = prefs.getBool('onboarding_seen') ?? false;
+    final prefillRegister = prefs.getBool('auth_prefill_register') ?? false;
+
+    if (!mounted) return;
+
+    setState(() {
+      _seenOnboarding = seen;
+      _prefillRegister = prefillRegister;
+    });
+  }
+
+  Future<void> _consumeRegisterPrefillIfNeeded() async {
+    if (!_prefillRegister) return;
+
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('auth_prefill_register', false);
+
+    if (!mounted) return;
+
+    setState(() {
+      _prefillRegister = false;
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
+    if (_seenOnboarding == null) {
+      return const Scaffold(
+        body: Center(child: CircularProgressIndicator()),
+      );
+    }
+
+    if (!_seenOnboarding!) {
+      return const OnboardingPage();
+    }
+
     return StreamBuilder<AuthState>(
       stream: Supabase.instance.client.auth.onAuthStateChange,
       builder: (context, snapshot) {
-        // ✅ While waiting for first auth event, show something lightweight
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const Scaffold(
             body: Center(child: CircularProgressIndicator()),
@@ -113,10 +155,17 @@ class _RootGate extends StatelessWidget {
         final user = session?.user;
 
         if (user == null) {
-          return const AuthPage();
+          final showRegisterFirst = _prefillRegister;
+
+          if (showRegisterFirst) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              _consumeRegisterPrefillIfNeeded();
+            });
+          }
+
+          return AuthPage(initialIsLogin: !showRegisterFirst);
         }
 
-        // ✅ Configure RevenueCat once after login (and keep it out of HomePage lifecycle)
         return const _PostLoginBootstrap(child: HomePage());
       },
     );
@@ -144,8 +193,10 @@ class _PostLoginBootstrapState extends State<_PostLoginBootstrap> {
     if (_done) return;
     _done = true;
 
-    // ✅ Safe: user exists here.
     await RevenueCatService.instance.configureIfNeeded();
+
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('auth_prefill_register', false);
   }
 
   @override

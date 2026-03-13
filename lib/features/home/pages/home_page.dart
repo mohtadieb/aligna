@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:aligna/pages/settings_page.dart';
+import 'package:app/pages/settings_page.dart';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -34,13 +34,22 @@ class _HomePageState extends State<HomePage> {
 
   StreamSubscription<AuthState>? _authSub;
 
+  static const _brandGradient = LinearGradient(
+    colors: [
+      Color(0xFF7B5CF0),
+      Color(0xFFE96BD2),
+      Color(0xFFFFA96C),
+    ],
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+  );
+
   @override
   void initState() {
     super.initState();
 
     _listenToAuthChanges();
 
-    // ✅ Cold start: do ONE unified RC sync + load content if logged in
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       await RevenueCatService.instance.handleAuthUserChanged();
 
@@ -70,10 +79,8 @@ class _HomePageState extends State<HomePage> {
     _authSub = sb.auth.onAuthStateChange.listen((event) async {
       final user = sb.auth.currentUser;
 
-      // ✅ Always let one method decide what to do (login vs logout)
       await RevenueCatService.instance.handleAuthUserChanged();
 
-      // Logged out (or session expired): stop realtime + clear UI
       if (user == null) {
         _reloadDebounce?.cancel();
         _stopRealtime();
@@ -86,7 +93,6 @@ class _HomePageState extends State<HomePage> {
         return;
       }
 
-      // Logged in (or refreshed): ensure realtime + reload list
       _setupRealtime();
       await _loadMySessions(showLoading: true);
 
@@ -146,8 +152,7 @@ class _HomePageState extends State<HomePage> {
           if (mounted) _loadMySessions(showLoading: false);
         });
       },
-    )
-        .subscribe();
+    ).subscribe();
   }
 
   Future<void> _loadMySessions({bool showLoading = true}) async {
@@ -189,7 +194,7 @@ class _HomePageState extends State<HomePage> {
 
   String _statusLabel(Map<String, dynamic> s) {
     final status = (s['status'] as String?) ?? 'waiting';
-    if (status == 'completed') return 'Completed ✅';
+    if (status == 'completed') return 'Completed';
     final partnerId = s['partner_id'] as String?;
     if (partnerId == null) return 'Waiting for partner';
     return 'Active';
@@ -200,7 +205,15 @@ class _HomePageState extends State<HomePage> {
     if (status == 'completed') return Colors.green.withOpacity(0.12);
     final partnerId = s['partner_id'] as String?;
     if (partnerId == null) return Colors.orange.withOpacity(0.12);
-    return Colors.blue.withOpacity(0.12);
+    return const Color(0xFF7B5CF0).withOpacity(0.12);
+  }
+
+  Color _statusText(Map<String, dynamic> s) {
+    final status = (s['status'] as String?) ?? 'waiting';
+    if (status == 'completed') return Colors.green.shade700;
+    final partnerId = s['partner_id'] as String?;
+    if (partnerId == null) return Colors.orange.shade800;
+    return const Color(0xFF6A42E8);
   }
 
   bool _canDelete(Map<String, dynamic> s) {
@@ -234,15 +247,19 @@ class _HomePageState extends State<HomePage> {
     await showModalBottomSheet(
       context: context,
       showDragHandle: true,
+      backgroundColor: Colors.white,
       builder: (ctx) {
         return SafeArea(
           child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
+            padding: const EdgeInsets.fromLTRB(20, 10, 20, 20),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(invite, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
+                Text(
+                  invite,
+                  style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+                ),
                 const SizedBox(height: 12),
                 ListTile(
                   contentPadding: EdgeInsets.zero,
@@ -324,15 +341,19 @@ class _HomePageState extends State<HomePage> {
     await showModalBottomSheet(
       context: context,
       showDragHandle: true,
+      backgroundColor: Colors.white,
       builder: (ctx) {
         return SafeArea(
           child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
+            padding: const EdgeInsets.fromLTRB(20, 10, 20, 20),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text('Aligna Pro', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
+                const Text(
+                  'Aligna Pro',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+                ),
                 const SizedBox(height: 12),
                 ListTile(
                   contentPadding: EdgeInsets.zero,
@@ -393,12 +414,34 @@ class _HomePageState extends State<HomePage> {
             final label = !ready ? '…' : (isPro ? 'Pro' : 'Unlock Pro');
             final icon = !ready
                 ? Icons.hourglass_top
-                : (isPro ? Icons.verified : Icons.lock_outline);
+                : (isPro ? Icons.verified_rounded : Icons.lock_outline_rounded);
 
-            return TextButton.icon(
-              onPressed: !ready ? null : (isPro ? _openProManagement : _openPro),
-              icon: Icon(icon),
-              label: Text(label),
+            return Container(
+              margin: const EdgeInsets.only(right: 6),
+              decoration: BoxDecoration(
+                gradient: isPro ? _brandGradient : null,
+                color: isPro ? null : Colors.white,
+                borderRadius: BorderRadius.circular(999),
+                border: isPro ? null : Border.all(color: Colors.black12),
+              ),
+              child: TextButton.icon(
+                onPressed: !ready ? null : (isPro ? _openProManagement : _openPro),
+                icon: Icon(
+                  icon,
+                  size: 18,
+                  color: isPro ? Colors.white : const Color(0xFF6A42E8),
+                ),
+                label: Text(
+                  label,
+                  style: TextStyle(
+                    color: isPro ? Colors.white : const Color(0xFF6A42E8),
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                style: TextButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                ),
+              ),
             );
           },
         );
@@ -406,30 +449,278 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  Future<void> _logout() async {
-    try {
-      _stopRealtime();
-      // Auth listener will call handleAuthUserChanged() -> resetForLogout()
-      await sb.auth.signOut(scope: SignOutScope.local);
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Logout failed: $e')),
+  Widget _buildHeaderCard() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        gradient: _brandGradient,
+        borderRadius: BorderRadius.circular(28),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF7B5CF0).withOpacity(0.18),
+            blurRadius: 28,
+            offset: const Offset(0, 12),
+          ),
+        ],
+      ),
+      child: const Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Build stronger\nrelationship clarity',
+            style: TextStyle(
+              fontSize: 28,
+              height: 1.1,
+              fontWeight: FontWeight.w800,
+              color: Colors.white,
+            ),
+          ),
+          SizedBox(height: 10),
+          Text(
+            'Create a private session, invite your partner, and discover your compatibility together.',
+            style: TextStyle(
+              fontSize: 15,
+              height: 1.4,
+              color: Colors.white,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPrimaryButton({
+    required String text,
+    required VoidCallback onPressed,
+  }) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        gradient: _brandGradient,
+        borderRadius: BorderRadius.circular(18),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF7B5CF0).withOpacity(0.18),
+            blurRadius: 18,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: ElevatedButton(
+        onPressed: onPressed,
+        style: ElevatedButton.styleFrom(
+          minimumSize: const Size.fromHeight(56),
+          backgroundColor: Colors.transparent,
+          shadowColor: Colors.transparent,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(18),
+          ),
+        ),
+        child: Text(
+          text,
+          style: TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.w700,
+            color: Colors.white,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSecondaryButton({
+    required String text,
+    required VoidCallback onPressed,
+  }) {
+    return OutlinedButton(
+      onPressed: onPressed,
+      style: OutlinedButton.styleFrom(
+        minimumSize: const Size.fromHeight(56),
+        backgroundColor: Colors.white,
+        side: const BorderSide(color: Color(0xFFE8DFFB)),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(18),
+        ),
+      ),
+      child: Text(
+        text,
+        style: TextStyle(
+          fontSize: 16,
+          fontWeight: FontWeight.w700,
+          color: Color(0xFF6A42E8),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildEmptyState() {
+    return Expanded(
+      child: Center(
+        child: Container(
+          padding: const EdgeInsets.all(24),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(28),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.05),
+                blurRadius: 24,
+                offset: const Offset(0, 10),
+              ),
+            ],
+          ),
+          child: const Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.favorite_outline_rounded,
+                size: 44,
+                color: Color(0xFF7B5CF0),
+              ),
+              SizedBox(height: 14),
+              Text(
+                'No sessions yet',
+                style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              SizedBox(height: 8),
+              Text(
+                'Create one or join with a code to get started.',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: Colors.black54,
+                  fontSize: 14,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSessionCard(Map<String, dynamic> s) {
+    final id = s['id'] as String;
+    final invite = s['invite_code'] as String? ?? '';
+    final label = _statusLabel(s);
+
+    return InkWell(
+      borderRadius: BorderRadius.circular(24),
+      onTap: () async {
+        await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => SessionDashboardPage(sessionId: id),
+          ),
         );
-      }
-    }
+        await _loadMySessions(showLoading: true);
+      },
+      onLongPress: () => _showSessionActions(s),
+      child: Container(
+        padding: const EdgeInsets.all(18),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(24),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.05),
+              blurRadius: 22,
+              offset: const Offset(0, 10),
+            ),
+          ],
+          border: Border.all(color: const Color(0xFFF0EAFB)),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 54,
+              height: 54,
+              decoration: BoxDecoration(
+                gradient: _brandGradient,
+                borderRadius: BorderRadius.circular(18),
+              ),
+              child: const Icon(
+                Icons.favorite_rounded,
+                color: Colors.white,
+              ),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    invite.isEmpty ? 'Session' : invite,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w800,
+                      fontSize: 17,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    label,
+                    style: const TextStyle(
+                      color: Colors.black54,
+                      fontSize: 14,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: _statusBg(s),
+                borderRadius: BorderRadius.circular(999),
+              ),
+              child: Text(
+                label,
+                style: TextStyle(
+                  fontWeight: FontWeight.w700,
+                  fontSize: 13,
+                  color: _statusText(s),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: const Color(0xFFF8F5FF),
       appBar: AppBar(
-        title: const Text('Aligna'),
+        backgroundColor: const Color(0xFFF8F5FF),
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        titleSpacing: 16,
+        title: Row(
+          children: [
+            Image.asset(
+              'assets/icon/aligna_inapp_icon.png',
+              width: 28,
+              height: 28,
+            ),
+            const SizedBox(width: 10),
+            const Text(
+              'Aligna',
+              style: TextStyle(
+                fontWeight: FontWeight.w800,
+                color: Colors.black,
+              ),
+            ),
+          ],
+        ),
         actions: [
           _proChip(),
           IconButton(
             onPressed: () => _loadMySessions(showLoading: true),
-            icon: const Icon(Icons.refresh),
+            icon: const Icon(Icons.refresh_rounded),
             tooltip: 'Refresh',
           ),
           IconButton(
@@ -439,25 +730,23 @@ class _HomePageState extends State<HomePage> {
                 MaterialPageRoute(builder: (_) => const SettingsPage()),
               );
             },
-            icon: const Icon(Icons.settings),
+            icon: const Icon(Icons.settings_outlined),
             tooltip: 'Settings',
           ),
-          IconButton(
-            onPressed: _logout,
-            icon: const Icon(Icons.logout),
-            tooltip: 'Logout',
-          ),
+          const SizedBox(width: 6),
         ],
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            SizedBox(
-              width: double.infinity,
-              height: 48,
-              child: ElevatedButton(
+      body: SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _buildHeaderCard(),
+              const SizedBox(height: 18),
+              _buildPrimaryButton(
+                text: 'Create session',
                 onPressed: () async {
                   await Navigator.push(
                     context,
@@ -465,14 +754,10 @@ class _HomePageState extends State<HomePage> {
                   );
                   await _loadMySessions(showLoading: true);
                 },
-                child: const Text('Create session'),
               ),
-            ),
-            const SizedBox(height: 12),
-            SizedBox(
-              width: double.infinity,
-              height: 48,
-              child: OutlinedButton(
+              const SizedBox(height: 12),
+              _buildSecondaryButton(
+                text: 'Join session',
                 onPressed: () async {
                   await Navigator.push(
                     context,
@@ -480,109 +765,59 @@ class _HomePageState extends State<HomePage> {
                   );
                   await _loadMySessions(showLoading: true);
                 },
-                child: const Text('Join session'),
               ),
-            ),
-            const SizedBox(height: 20),
-            Row(
-              children: [
-                const Expanded(
-                  child: Text(
-                    'Your sessions',
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
-                  ),
-                ),
-                TextButton(
-                  onPressed: () async {
-                    await Navigator.push(
-                      context,
-                      MaterialPageRoute(builder: (_) => const ArchivedSessionsPage()),
-                    );
-                    await _loadMySessions(showLoading: true);
-                  },
-                  child: const Text('Archived'),
-                ),
-              ],
-            ),
-            const SizedBox(height: 10),
-            if (_loading)
-              const Expanded(child: Center(child: CircularProgressIndicator()))
-            else if (_sessions.isEmpty)
-              const Expanded(
-                child: Center(
-                  child: Text(
-                    'No sessions yet.\nCreate one or join with a code.',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(color: Colors.black54),
-                  ),
-                ),
-              )
-            else
-              Expanded(
-                child: ListView.separated(
-                  itemCount: _sessions.length,
-                  separatorBuilder: (_, __) => const SizedBox(height: 12),
-                  itemBuilder: (context, i) {
-                    final s = _sessions[i];
-                    final id = s['id'] as String;
-                    final invite = s['invite_code'] as String? ?? '';
-                    final label = _statusLabel(s);
-
-                    return InkWell(
-                      borderRadius: BorderRadius.circular(16),
-                      onTap: () async {
-                        await Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => SessionDashboardPage(sessionId: id),
-                          ),
-                        );
-                        await _loadMySessions(showLoading: true);
-                      },
-                      onLongPress: () => _showSessionActions(s),
-                      child: Container(
-                        padding: const EdgeInsets.all(14),
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(16),
-                          border: Border.all(color: Colors.black12),
-                        ),
-                        child: Row(
-                          children: [
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    invite.isEmpty ? 'Session' : invite,
-                                    style: const TextStyle(
-                                      fontWeight: FontWeight.w800,
-                                      fontSize: 16,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 6),
-                                  Text(label, style: const TextStyle(color: Colors.black54)),
-                                ],
-                              ),
-                            ),
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                              decoration: BoxDecoration(
-                                color: _statusBg(s),
-                                borderRadius: BorderRadius.circular(999),
-                              ),
-                              child: Text(
-                                label.replaceAll(' ✅', ''),
-                                style: const TextStyle(fontWeight: FontWeight.w700),
-                              ),
-                            ),
-                          ],
-                        ),
+              const SizedBox(height: 22),
+              Row(
+                children: [
+                  const Expanded(
+                    child: Text(
+                      'Your sessions',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w800,
                       ),
-                    );
-                  },
-                ),
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: () async {
+                      await Navigator.push(
+                        context,
+                        MaterialPageRoute(builder: (_) => const ArchivedSessionsPage()),
+                      );
+                      await _loadMySessions(showLoading: true);
+                    },
+                    child: const Text(
+                      'Archived',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w700,
+                        color: Color(0xFF6A42E8),
+                      ),
+                    ),
+                  ),
+                ],
               ),
-          ],
+              const SizedBox(height: 10),
+              if (_loading)
+                const Expanded(
+                  child: Center(
+                    child: CircularProgressIndicator(),
+                  ),
+                )
+              else if (_sessions.isEmpty)
+                _buildEmptyState()
+              else
+                Expanded(
+                  child: ListView.separated(
+                    itemCount: _sessions.length,
+                    separatorBuilder: (_, __) => const SizedBox(height: 14),
+                    itemBuilder: (context, i) {
+                      final s = _sessions[i];
+                      return _buildSessionCard(s);
+                    },
+                  ),
+                ),
+            ],
+          ),
         ),
       ),
     );

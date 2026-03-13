@@ -29,32 +29,39 @@ class _SessionDashboardPageState extends State<SessionDashboardPage> {
   int _myCount = 0;
   int _otherCount = 0;
 
-  // Module progress
   List<Map<String, dynamic>> _modules = [];
   final Map<String, int> _totalByModule = {};
   final Map<String, int> _answeredByModule = {};
   final Map<String, int> _otherAnsweredByModule = {};
 
-  // ✅ Continue behavior (MY progress only)
   String? _firstMyIncompleteModuleId;
   String? _firstMyIncompleteModuleTitle;
 
   RealtimeChannel? _sessionChannel;
   Timer? _reloadDebounce;
 
-  // ✅ Completed celebration (show once per session per user)
   bool _celebrationShowing = false;
   bool _checkedCompletionOnceAfterInitialLoad = false;
 
+  static const _brandGradient = LinearGradient(
+    colors: [
+      Color(0xFF7B5CF0),
+      Color(0xFFE96BD2),
+      Color(0xFFFFA96C),
+    ],
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+  );
+
   String get _currentUserId {
     final id = sb.auth.currentUser?.id;
-    // If you ever support "anonymous / no auth", you can fall back to device id.
     return id ?? 'unknown_user';
   }
 
-  static const String _celebrationPrefPrefix = 'aligna:celebration_shown';
+  static const String _celebrationPrefPrefix = 'app:celebration_shown';
 
-  String _celebrationKey() => '$_celebrationPrefPrefix:${_currentUserId}:${widget.sessionId}';
+  String _celebrationKey() =>
+      '$_celebrationPrefPrefix:${_currentUserId}:${widget.sessionId}';
 
   @override
   void initState() {
@@ -102,12 +109,10 @@ class _SessionDashboardPageState extends State<SessionDashboardPage> {
         final partnerJustJoined = oldPartner == null && newPartner != null;
         final statusChanged = oldStatus != newStatus;
 
-        // ✅ Celebration trigger (status becomes completed)
         if (statusChanged && newStatus == 'completed') {
           await _maybeShowCompletedCelebration();
         }
 
-        // ✅ Only reload for meaningful changes
         if (!partnerJustJoined && !statusChanged) return;
 
         _reloadDebounce?.cancel();
@@ -115,28 +120,23 @@ class _SessionDashboardPageState extends State<SessionDashboardPage> {
           if (mounted) _loadAll(showLoading: false);
         });
       },
-    )
-        .subscribe();
+    ).subscribe();
   }
 
-  // ✅ Finds first incomplete module for *ME only*
   String? _computeFirstMyIncompleteModuleId() {
     for (final m in _modules) {
       final moduleId = m['id'] as String;
       final total = _totalByModule[moduleId] ?? 0;
       final myAnswered = _answeredByModule[moduleId] ?? 0;
 
-      // Treat empty module as incomplete
       if (total == 0) return moduleId;
-
       if (myAnswered < total) return moduleId;
     }
     return null;
   }
 
   Future<void> _maybeShowCompletedCelebration() async {
-    if (!mounted) return;
-    if (_celebrationShowing) return;
+    if (!mounted || _celebrationShowing) return;
 
     final prefs = await SharedPreferences.getInstance();
     final alreadyShown = prefs.getBool(_celebrationKey()) ?? false;
@@ -145,7 +145,6 @@ class _SessionDashboardPageState extends State<SessionDashboardPage> {
     _celebrationShowing = true;
     await prefs.setBool(_celebrationKey(), true);
 
-    // Show after frame to avoid flicker / conflicts with rebuild
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted) return;
 
@@ -177,7 +176,6 @@ class _SessionDashboardPageState extends State<SessionDashboardPage> {
         'p_session_id': widget.sessionId,
       });
 
-      // Supabase can return Map or List depending on settings
       final data = (raw is Map<String, dynamic>)
           ? raw
           : (raw is List && raw.isNotEmpty)
@@ -224,15 +222,12 @@ class _SessionDashboardPageState extends State<SessionDashboardPage> {
         _totalQuestions = totalQuestions;
         _myCount = myCount;
         _otherCount = otherCount;
-
         _modules = modules;
         _firstMyIncompleteModuleId = firstMyId;
         _firstMyIncompleteModuleTitle = firstMyTitle;
-
         _loading = false;
       });
 
-      // ✅ If user opens dashboard after session already completed, still show once.
       if (!_checkedCompletionOnceAfterInitialLoad) {
         _checkedCompletionOnceAfterInitialLoad = true;
         final status = session['status'] as String?;
@@ -269,10 +264,314 @@ class _SessionDashboardPageState extends State<SessionDashboardPage> {
     await _loadAll(showLoading: false);
   }
 
+  Widget _buildTopHero({
+    required String inviteCode,
+    required bool partnerJoined,
+  }) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        gradient: _brandGradient,
+        borderRadius: BorderRadius.circular(28),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF7B5CF0).withOpacity(0.18),
+            blurRadius: 28,
+            offset: const Offset(0, 12),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Your private\nsession space',
+            style: TextStyle(
+              fontSize: 28,
+              height: 1.1,
+              fontWeight: FontWeight.w800,
+              color: Colors.white,
+            ),
+          ),
+          const SizedBox(height: 10),
+          Text(
+            partnerJoined
+                ? 'Your partner joined. Keep going and complete the session together.'
+                : 'Share your invite code and start answering questions right away.',
+            style: const TextStyle(
+              fontSize: 15,
+              height: 1.4,
+              color: Colors.white,
+            ),
+          ),
+          const SizedBox(height: 18),
+          Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.16),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: Colors.white.withOpacity(0.18)),
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Invite code',
+                        style: TextStyle(
+                          color: Colors.white70,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        inviteCode,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 22,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: 1.6,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Container(
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  child: IconButton(
+                    onPressed: () async {
+                      await Clipboard.setData(ClipboardData(text: inviteCode));
+                      if (!mounted) return;
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Invite code copied')),
+                      );
+                    },
+                    icon: const Icon(
+                      Icons.copy_rounded,
+                      color: Color(0xFF6A42E8),
+                    ),
+                    tooltip: 'Copy',
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildProgressCard({
+    required bool partnerJoined,
+    required double myProgress,
+    required double otherProgress,
+    required bool hasMyIncomplete,
+    required int nextMine,
+    required int nextOther,
+    required int nextTotal,
+  }) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(24),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.05),
+            blurRadius: 24,
+            offset: const Offset(0, 10),
+          ),
+        ],
+        border: Border.all(color: const Color(0xFFF0EAFB)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Progress',
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 14),
+          const Text(
+            'You',
+            style: TextStyle(fontWeight: FontWeight.w700),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            '$_myCount / $_totalQuestions answered',
+            style: const TextStyle(color: Colors.black54),
+          ),
+          const SizedBox(height: 8),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(999),
+            child: LinearProgressIndicator(
+              value: myProgress,
+              minHeight: 10,
+              backgroundColor: const Color(0xFFF0EAFB),
+              valueColor: const AlwaysStoppedAnimation(Color(0xFF7B5CF0)),
+            ),
+          ),
+          const SizedBox(height: 16),
+          const Text(
+            'Partner',
+            style: TextStyle(fontWeight: FontWeight.w700),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            partnerJoined
+                ? '$_otherCount / $_totalQuestions answered'
+                : 'Not joined yet',
+            style: const TextStyle(color: Colors.black54),
+          ),
+          const SizedBox(height: 8),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(999),
+            child: LinearProgressIndicator(
+              value: otherProgress,
+              minHeight: 10,
+              backgroundColor: const Color(0xFFF0EAFB),
+              valueColor: const AlwaysStoppedAnimation(Color(0xFFE96BD2)),
+            ),
+          ),
+          const SizedBox(height: 16),
+          Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: const Color(0xFFF8F5FF),
+              borderRadius: BorderRadius.circular(18),
+            ),
+            child: Text(
+              hasMyIncomplete && _firstMyIncompleteModuleTitle != null
+                  ? partnerJoined
+                  ? 'Next up: $_firstMyIncompleteModuleTitle ($nextMine/$nextTotal • Partner $nextOther/$nextTotal)'
+                  : 'Next up: $_firstMyIncompleteModuleTitle ($nextMine/$nextTotal)'
+                  : 'You’ve completed all modules.',
+              style: const TextStyle(
+                color: Colors.black87,
+                height: 1.35,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildInfoPill(bool partnerJoined) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: partnerJoined
+            ? Colors.green.withOpacity(0.10)
+            : const Color(0xFFFFA96C).withOpacity(0.14),
+        borderRadius: BorderRadius.circular(18),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            partnerJoined ? Icons.check_circle_rounded : Icons.schedule_rounded,
+            size: 18,
+            color: partnerJoined ? Colors.green.shade700 : Colors.orange.shade800,
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              partnerJoined
+                  ? 'Partner joined successfully.'
+                  : 'Partner hasn’t joined yet — you can already start.',
+              style: TextStyle(
+                color: partnerJoined
+                    ? Colors.green.shade800
+                    : Colors.orange.shade900,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _gradientButton({
+    required String text,
+    required VoidCallback onPressed,
+  }) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        gradient: _brandGradient,
+        borderRadius: BorderRadius.circular(18),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF7B5CF0).withOpacity(0.18),
+            blurRadius: 18,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: ElevatedButton(
+        onPressed: onPressed,
+        style: ElevatedButton.styleFrom(
+          minimumSize: const Size.fromHeight(56),
+          backgroundColor: Colors.transparent,
+          shadowColor: Colors.transparent,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(18),
+          ),
+        ),
+        child: Text(
+          text,
+          style: const TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.w700,
+            color: Colors.white,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _outlineButton({
+    required String text,
+    required VoidCallback onPressed,
+  }) {
+    return OutlinedButton(
+      onPressed: onPressed,
+      style: OutlinedButton.styleFrom(
+        minimumSize: const Size.fromHeight(56),
+        backgroundColor: Colors.white,
+        side: const BorderSide(color: Color(0xFFE8DFFB)),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(18),
+        ),
+      ),
+      child: Text(
+        text,
+        style: const TextStyle(
+          fontSize: 16,
+          fontWeight: FontWeight.w700,
+          color: Color(0xFF6A42E8),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_loading || _session == null) {
       return const Scaffold(
+        backgroundColor: Color(0xFFF8F5FF),
         body: Center(child: CircularProgressIndicator()),
       );
     }
@@ -293,145 +592,117 @@ class _SessionDashboardPageState extends State<SessionDashboardPage> {
     final nextOther = nextId == null ? 0 : (_otherAnsweredByModule[nextId] ?? 0);
 
     return Scaffold(
+      backgroundColor: const Color(0xFFF8F5FF),
       appBar: AppBar(
-        title: const Text('Session'),
+        backgroundColor: const Color(0xFFF8F5FF),
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        title: Row(
+          children: [
+            Image.asset(
+              'assets/icon/aligna_inapp_icon.png',
+              height: 28,
+            ),
+            const SizedBox(width: 10),
+            const Expanded(
+              child: Text(
+                'Session',
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontWeight: FontWeight.w800,
+                  color: Colors.black,
+                ),
+              ),
+            ),
+          ],
+        ),
         actions: [
           IconButton(
             onPressed: () => _loadAll(showLoading: true),
-            icon: const Icon(Icons.refresh),
+            icon: const Icon(Icons.refresh_rounded),
             tooltip: 'Refresh',
           ),
         ],
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text('Invite code', style: TextStyle(fontWeight: FontWeight.w600)),
-            const SizedBox(height: 6),
-            Row(
-              children: [
-                Expanded(
-                  child: Container(
-                    padding: const EdgeInsets.all(14),
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(14),
-                      border: Border.all(color: Colors.black12),
+      body: SafeArea(
+        top: false,
+        child: CustomScrollView(
+          physics: const BouncingScrollPhysics(),
+          slivers: [
+            SliverPadding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+              sliver: SliverToBoxAdapter(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _buildTopHero(
+                      inviteCode: inviteCode,
+                      partnerJoined: partnerJoined,
                     ),
-                    child: Text(
-                      inviteCode,
-                      style: const TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: 1.2,
+                    const SizedBox(height: 14),
+                    _buildInfoPill(partnerJoined),
+                    const SizedBox(height: 16),
+                    _buildProgressCard(
+                      partnerJoined: partnerJoined,
+                      myProgress: myProgress,
+                      otherProgress: otherProgress,
+                      hasMyIncomplete: hasMyIncomplete,
+                      nextMine: nextMine,
+                      nextOther: nextOther,
+                      nextTotal: nextTotal,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            SliverPadding(
+              padding: const EdgeInsets.fromLTRB(16, 20, 16, 16),
+              sliver: SliverFillRemaining(
+                hasScrollBody: false,
+                child: Column(
+                  children: [
+                    const Spacer(),
+                    _outlineButton(
+                      text: 'View Results',
+                      onPressed: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => ResultsPage(sessionId: widget.sessionId),
+                          ),
+                        );
+                      },
+                    ),
+                    if (hasMyIncomplete) ...[
+                      const SizedBox(height: 12),
+                      _gradientButton(
+                        text: 'Continue',
+                        onPressed: _continue,
+                      ),
+                    ],
+                    const SizedBox(height: 10),
+                    Center(
+                      child: TextButton(
+                        onPressed: () async {
+                          await Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => ModuleListPage(sessionId: widget.sessionId),
+                            ),
+                          );
+                          await _loadAll(showLoading: false);
+                        },
+                        child: const Text(
+                          'Open module list',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w700,
+                            color: Color(0xFF6A42E8),
+                          ),
+                        ),
                       ),
                     ),
-                  ),
+                  ],
                 ),
-                const SizedBox(width: 10),
-                IconButton(
-                  onPressed: () async {
-                    await Clipboard.setData(ClipboardData(text: inviteCode));
-                    if (!mounted) return;
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Invite code copied')),
-                    );
-                  },
-                  icon: const Icon(Icons.copy),
-                  tooltip: 'Copy',
-                )
-              ],
-            ),
-            const SizedBox(height: 14),
-            Text(
-              partnerJoined ? 'Partner joined ✅' : 'Partner hasn’t joined yet — you can already start.',
-              style: const TextStyle(color: Colors.black54),
-            ),
-            const SizedBox(height: 18),
-            Container(
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: Colors.black12),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'Progress',
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
-                  ),
-                  const SizedBox(height: 10),
-                  Text('You: $_myCount / $_totalQuestions'),
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(999),
-                    child: LinearProgressIndicator(value: myProgress, minHeight: 8),
-                  ),
-                  const SizedBox(height: 10),
-                  Text(
-                    partnerJoined ? 'Partner: $_otherCount / $_totalQuestions' : 'Partner: not joined yet',
-                  ),
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(999),
-                    child: LinearProgressIndicator(value: otherProgress, minHeight: 8),
-                  ),
-                  const SizedBox(height: 12),
-                  if (hasMyIncomplete && _firstMyIncompleteModuleTitle != null)
-                    Text(
-                      partnerJoined
-                          ? 'Next up: $_firstMyIncompleteModuleTitle ($nextMine/$nextTotal • Partner $nextOther/$nextTotal)'
-                          : 'Next up: $_firstMyIncompleteModuleTitle ($nextMine/$nextTotal)',
-                      style: const TextStyle(color: Colors.black54),
-                    )
-                  else
-                    const Text(
-                      'You’ve completed all modules.',
-                      style: TextStyle(color: Colors.black54),
-                    ),
-                ],
-              ),
-            ),
-            const Spacer(),
-            SizedBox(
-              width: double.infinity,
-              height: 48,
-              child: OutlinedButton(
-                onPressed: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => ResultsPage(sessionId: widget.sessionId),
-                    ),
-                  );
-                },
-                child: const Text('View Results'),
-              ),
-            ),
-            if (hasMyIncomplete) ...[
-              const SizedBox(height: 12),
-              SizedBox(
-                width: double.infinity,
-                height: 48,
-                child: ElevatedButton(
-                  onPressed: _continue,
-                  child: const Text('Continue'),
-                ),
-              ),
-            ],
-            const SizedBox(height: 12),
-            Center(
-              child: TextButton(
-                onPressed: () async {
-                  await Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => ModuleListPage(sessionId: widget.sessionId),
-                    ),
-                  );
-                  await _loadAll(showLoading: false);
-                },
-                child: const Text('Open module list'),
               ),
             ),
           ],
@@ -447,14 +718,28 @@ class _CompletedCelebrationDialog extends StatefulWidget {
   final VoidCallback onViewResults;
 
   @override
-  State<_CompletedCelebrationDialog> createState() => _CompletedCelebrationDialogState();
+  State<_CompletedCelebrationDialog> createState() =>
+      _CompletedCelebrationDialogState();
 }
 
 class _CompletedCelebrationDialogState extends State<_CompletedCelebrationDialog>
     with SingleTickerProviderStateMixin {
-  late final AnimationController _controller;
+  static const _brandGradient = LinearGradient(
+    colors: [
+      Color(0xFF7B5CF0),
+      Color(0xFFE96BD2),
+      Color(0xFFFFA96C),
+    ],
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+  );
 
-  // Pre-generated particles (so no random changes mid-animation)
+  static const _cardBorder = Color(0xFFF0EAFB);
+  static const _primaryPurple = Color(0xFF6A42E8);
+  static const _softPurple = Color(0xFFF8F5FF);
+  static const _softPink = Color(0xFFFFF4FB);
+
+  late final AnimationController _controller;
   late final List<_ConfettiParticle> _particles;
   final _rand = Random();
 
@@ -465,28 +750,24 @@ class _CompletedCelebrationDialogState extends State<_CompletedCelebrationDialog
     _controller = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 1100),
-    )..forward(); // play once
+    )..forward();
 
     _particles = List.generate(90, (_) => _makeParticle());
   }
 
   _ConfettiParticle _makeParticle() {
-    // Launch upwards-ish from the top-center area
-    final angle = (-pi / 2) + (_rand.nextDouble() * 0.9 - 0.45); // around straight up
-    final speed = 250 + _rand.nextDouble() * 260; // px/s
+    final angle = (-pi / 2) + (_rand.nextDouble() * 0.9 - 0.45);
+    final speed = 250 + _rand.nextDouble() * 260;
     final size = 4 + _rand.nextDouble() * 6;
-
-    // Slight variation in gravity + spin
     final gravity = 650 + _rand.nextDouble() * 550;
     final rotationSpeed = (_rand.nextDouble() * 8 - 4);
 
-    // Confetti palette
     const colors = [
-      Color(0xFF5B8DEF),
-      Color(0xFF7ED957),
-      Color(0xFFFFC857),
-      Color(0xFFFF6B6B),
+      Color(0xFF7B5CF0),
+      Color(0xFFE96BD2),
+      Color(0xFFFFA96C),
       Color(0xFFB16CEA),
+      Color(0xFFFFC857),
       Color(0xFF4ECDC4),
     ];
 
@@ -498,11 +779,8 @@ class _CompletedCelebrationDialogState extends State<_CompletedCelebrationDialog
       rotation: _rand.nextDouble() * pi,
       rotationSpeed: rotationSpeed,
       color: colors[_rand.nextInt(colors.length)],
-      // small horizontal spread from center
       xOffset: (_rand.nextDouble() * 120) - 60,
-      // start slightly above the emoji area
       yOffset: -10 - _rand.nextDouble() * 20,
-      // some are rectangles, some are circles
       isCircle: _rand.nextBool(),
     );
   }
@@ -513,83 +791,234 @@ class _CompletedCelebrationDialogState extends State<_CompletedCelebrationDialog
     super.dispose();
   }
 
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-
-    return Dialog(
-      insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(20),
-        child: Stack(
-          children: [
-            // 🎊 Confetti layer (behind content)
-            Positioned.fill(
-              child: IgnorePointer(
-                child: AnimatedBuilder(
-                  animation: _controller,
-                  builder: (_, __) {
-                    return CustomPaint(
-                      painter: _ConfettiPainter(
-                        t: _controller.value,
-                        particles: _particles,
-                      ),
-                    );
-                  },
+  Widget _gradientButton({
+    required String text,
+    required VoidCallback onPressed,
+    IconData? icon,
+  }) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        gradient: _brandGradient,
+        borderRadius: BorderRadius.circular(18),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF7B5CF0).withOpacity(0.18),
+            blurRadius: 18,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: ElevatedButton(
+        onPressed: onPressed,
+        style: ElevatedButton.styleFrom(
+          minimumSize: const Size.fromHeight(54),
+          backgroundColor: Colors.transparent,
+          shadowColor: Colors.transparent,
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 0),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(18),
+          ),
+        ),
+        child: FittedBox(
+          fit: BoxFit.scaleDown,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (icon != null) ...[
+                Icon(icon, color: Colors.white, size: 18),
+                const SizedBox(width: 6),
+              ],
+              Text(
+                text,
+                style: const TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w700,
+                  color: Colors.white,
                 ),
               ),
-            ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 
-            // Content
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 18, 20, 16),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text('🎉', style: theme.textTheme.displaySmall),
-                  const SizedBox(height: 8),
-                  Text(
-                    'Both of you finished!',
-                    textAlign: TextAlign.center,
-                    style: theme.textTheme.titleLarge?.copyWith(
-                      fontWeight: FontWeight.w700,
+  Widget _outlineButton({
+    required String text,
+    required VoidCallback onPressed,
+  }) {
+    return OutlinedButton(
+      onPressed: onPressed,
+      style: OutlinedButton.styleFrom(
+        minimumSize: const Size.fromHeight(54),
+        backgroundColor: Colors.white,
+        side: const BorderSide(color: _cardBorder),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(18),
+        ),
+      ),
+      child: Text(
+        text,
+        style: const TextStyle(
+          fontSize: 16,
+          fontWeight: FontWeight.w700,
+          color: _primaryPurple,
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+      backgroundColor: Colors.transparent,
+      elevation: 0,
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: IgnorePointer(
+              child: AnimatedBuilder(
+                animation: _controller,
+                builder: (_, __) {
+                  return CustomPaint(
+                    painter: _ConfettiPainter(
+                      t: _controller.value,
+                      particles: _particles,
+                    ),
+                  );
+                },
+              ),
+            ),
+          ),
+          Container(
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(30),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.08),
+                  blurRadius: 28,
+                  offset: const Offset(0, 12),
+                ),
+              ],
+              border: Border.all(color: _cardBorder),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.fromLTRB(22, 22, 22, 20),
+                  decoration: const BoxDecoration(
+                    gradient: _brandGradient,
+                    borderRadius: BorderRadius.vertical(
+                      top: Radius.circular(30),
                     ),
                   ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'Your session is complete. You can view your results now.',
-                    textAlign: TextAlign.center,
-                    style: theme.textTheme.bodyMedium?.copyWith(
-                      color: theme.textTheme.bodySmall?.color,
-                    ),
-                  ),
-                  const SizedBox(height: 18),
-                  Row(
+                  child: Column(
                     children: [
-                      Expanded(
-                        child: OutlinedButton(
-                          onPressed: () => Navigator.of(context).pop(),
-                          child: const Text('Not now'),
+                      Container(
+                        width: 68,
+                        height: 68,
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.18),
+                          borderRadius: BorderRadius.circular(22),
+                          border: Border.all(
+                            color: Colors.white.withOpacity(0.18),
+                          ),
+                        ),
+                        child: const Icon(
+                          Icons.celebration_rounded,
+                          color: Colors.white,
+                          size: 34,
                         ),
                       ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: FilledButton(
-                          onPressed: () {
-                            Navigator.of(context).pop();
-                            widget.onViewResults();
-                          },
-                          child: const Text('View Results'),
+                      const SizedBox(height: 16),
+                      const Text(
+                        'You both finished!',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontSize: 28,
+                          height: 1.08,
+                          fontWeight: FontWeight.w800,
+                          color: Colors.white,
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      const Text(
+                        'Your session is complete and your compatibility results are ready to explore together.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontSize: 15,
+                          height: 1.45,
+                          color: Colors.white,
                         ),
                       ),
                     ],
                   ),
-                ],
-              ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
+                  child: Column(
+                    children: [
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          color: _softPurple,
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: const Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Icon(
+                              Icons.auto_awesome_rounded,
+                              color: _primaryPurple,
+                              size: 20,
+                            ),
+                            SizedBox(width: 10),
+                            Expanded(
+                              child: Text(
+                                'You can view your final results now or come back to them later from the session page.',
+                                style: TextStyle(
+                                  color: Colors.black87,
+                                  height: 1.35,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: _outlineButton(
+                              text: 'Not now',
+                              onPressed: () => Navigator.of(context).pop(),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: _gradientButton(
+                              text: 'View Results',
+                              icon: Icons.arrow_forward_rounded,
+                              onPressed: () {
+                                Navigator.of(context).pop();
+                                widget.onViewResults();
+                              },
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ],
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
@@ -613,16 +1042,11 @@ class _ConfettiParticle {
   final double speed;
   final double size;
   final double gravity;
-
   final double rotation;
   final double rotationSpeed;
-
   final Color color;
-
-  // Relative start offsets from the burst origin
   final double xOffset;
   final double yOffset;
-
   final bool isCircle;
 }
 
@@ -632,37 +1056,30 @@ class _ConfettiPainter extends CustomPainter {
     required this.particles,
   });
 
-  final double t; // 0..1
+  final double t;
   final List<_ConfettiParticle> particles;
 
   @override
   void paint(Canvas canvas, Size size) {
-    // Burst origin near top-middle inside the dialog
     final origin = Offset(size.width / 2, 58);
-
-    // Convert t into seconds for physics
-    final totalSeconds = 1.1;
+    const totalSeconds = 1.1;
     final time = t * totalSeconds;
 
     for (final p in particles) {
-      // Initial velocity components
       final vx = cos(p.angle) * p.speed;
       final vy = sin(p.angle) * p.speed;
 
-      // Position under gravity (y positive downward)
       final dx = (vx * time) + p.xOffset;
       final dy = (vy * time) + (0.5 * p.gravity * time * time) + p.yOffset;
 
-      // Slight fade near end
-      final fade = (t < 0.85) ? 1.0 : (1.0 - ((t - 0.85) / 0.15)).clamp(0.0, 1.0);
+      final fade =
+      (t < 0.85) ? 1.0 : (1.0 - ((t - 0.85) / 0.15)).clamp(0.0, 1.0);
 
-      // Only draw while still mostly within the dialog bounds
       final pos = origin + Offset(dx, dy);
       if (pos.dy > size.height + 20) continue;
 
       final paint = Paint()..color = p.color.withValues(alpha: 0.9 * fade);
 
-      // Spin
       final rot = p.rotation + p.rotationSpeed * time;
 
       canvas.save();
