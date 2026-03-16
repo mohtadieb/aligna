@@ -231,11 +231,6 @@ class _AlignaAppState extends State<AlignaApp> {
       final type =
           uri.queryParameters['type'] ?? fragmentParams['type'];
 
-      // Optional debug logs while testing:
-      debugPrint('Reset password URI: $uri');
-      debugPrint('Reset password token_hash: $tokenHash');
-      debugPrint('Reset password type: $type');
-
       setState(() {
         _forcePasswordRecovery = true;
         _passwordRecoveryTokenHash = tokenHash;
