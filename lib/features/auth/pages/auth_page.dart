@@ -33,6 +33,7 @@ class _AuthPageState extends State<AuthPage> {
   static const _softPurple = Color(0xFFF8F5FF);
 
   bool _loading = false;
+  bool _sendingReset = false;
   late bool _isLogin;
   bool _obscurePassword = true;
 
@@ -40,6 +41,13 @@ class _AuthPageState extends State<AuthPage> {
   void initState() {
     super.initState();
     _isLogin = widget.initialIsLogin;
+  }
+
+  @override
+  void dispose() {
+    _email.dispose();
+    _password.dispose();
+    super.dispose();
   }
 
   Future<void> _submit() async {
@@ -69,6 +77,51 @@ class _AuthPageState extends State<AuthPage> {
       );
     } finally {
       if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _sendPasswordResetEmail() async {
+    FocusScope.of(context).unfocus();
+
+    final email = _email.text.trim();
+    if (email.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Enter your email address first.'),
+        ),
+      );
+      return;
+    }
+
+    setState(() => _sendingReset = true);
+
+    try {
+      await Supabase.instance.client.auth.resetPasswordForEmail(
+        email,
+        redirectTo: 'aligna://reset-password',
+      );
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          behavior: SnackBarBehavior.floating,
+          content: Text(
+            'If an account exists for $email, a password reset link has been sent.',
+          ),
+        ),
+      );
+    } on AuthException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.message)),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _sendingReset = false);
     }
   }
 
@@ -150,14 +203,9 @@ class _AuthPageState extends State<AuthPage> {
   }
 
   @override
-  void dispose() {
-    _email.dispose();
-    _password.dispose();
-    super.dispose();
-  }
-
-  @override
   Widget build(BuildContext context) {
+    final busy = _loading || _sendingReset;
+
     return Scaffold(
       backgroundColor: _pageBg,
       body: SafeArea(
@@ -190,7 +238,9 @@ class _AuthPageState extends State<AuthPage> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    _isLogin ? 'Welcome back\nto Aligna' : 'Create your\nAligna account',
+                    _isLogin
+                        ? 'Welcome back\nto Aligna'
+                        : 'Create your\nAligna account',
                     style: const TextStyle(
                       fontSize: 30,
                       height: 1.1,
@@ -282,15 +332,33 @@ class _AuthPageState extends State<AuthPage> {
                     textInputAction: TextInputAction.done,
                     autofillHints: const [AutofillHints.password],
                     onSubmitted: (_) {
-                      if (!_loading) _submit();
+                      if (!busy) _submit();
                     },
                   ),
-                  const SizedBox(height: 18),
+                  if (_isLogin) ...[
+                    const SizedBox(height: 8),
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: TextButton(
+                        onPressed: busy ? null : _sendPasswordResetEmail,
+                        child: Text(
+                          _sendingReset
+                              ? 'Sending...'
+                              : 'Forgot password?',
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w700,
+                            color: _primaryPurple,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 10),
                   _gradientButton(
                     text: _loading
                         ? 'Please wait...'
                         : (_isLogin ? 'Login' : 'Create account'),
-                    onPressed: _loading ? null : _submit,
+                    onPressed: busy ? null : _submit,
                     icon: _isLogin
                         ? Icons.login_rounded
                         : Icons.person_add_alt_1_rounded,
@@ -316,7 +384,7 @@ class _AuthPageState extends State<AuthPage> {
                   const SizedBox(height: 8),
                   Center(
                     child: TextButton(
-                      onPressed: _loading
+                      onPressed: busy
                           ? null
                           : () => setState(() => _isLogin = !_isLogin),
                       child: Text(
