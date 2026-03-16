@@ -16,6 +16,7 @@ class AuthPage extends StatefulWidget {
 class _AuthPageState extends State<AuthPage> {
   final _email = TextEditingController();
   final _password = TextEditingController();
+  final _confirmPassword = TextEditingController();
 
   static const _brandGradient = LinearGradient(
     colors: [
@@ -36,6 +37,7 @@ class _AuthPageState extends State<AuthPage> {
   bool _sendingReset = false;
   late bool _isLogin;
   bool _obscurePassword = true;
+  bool _obscureConfirmPassword = true;
 
   @override
   void initState() {
@@ -47,23 +49,71 @@ class _AuthPageState extends State<AuthPage> {
   void dispose() {
     _email.dispose();
     _password.dispose();
+    _confirmPassword.dispose();
     super.dispose();
   }
 
   Future<void> _submit() async {
     FocusScope.of(context).unfocus();
+
+    final email = _email.text.trim();
+    final pass = _password.text;
+    final confirmPass = _confirmPassword.text;
+
+    if (email.isEmpty || pass.isEmpty || (!_isLogin && confirmPass.isEmpty)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            _isLogin
+                ? 'Please enter your email and password.'
+                : 'Please enter your email and both password fields.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    if (!_isLogin && pass != confirmPass) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Passwords do not match.'),
+        ),
+      );
+      return;
+    }
+
     setState(() => _loading = true);
 
     try {
       final sb = Supabase.instance.client;
-      final email = _email.text.trim();
-      final pass = _password.text;
 
       if (_isLogin) {
-        await sb.auth.signInWithPassword(email: email, password: pass);
+        await sb.auth.signInWithPassword(
+          email: email,
+          password: pass,
+        );
       } else {
-        await sb.auth.signUp(email: email, password: pass);
-        await sb.auth.signInWithPassword(email: email, password: pass);
+        await sb.auth.signUp(
+          email: email,
+          password: pass,
+          emailRedirectTo: 'https://joinaligna.com',
+        );
+
+        if (!mounted) return;
+
+        setState(() {
+          _isLogin = true;
+          _password.clear();
+          _confirmPassword.clear();
+        });
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Confirmation email sent. Please check your inbox.',
+            ),
+          ),
+        );
       }
     } on AuthException catch (e) {
       if (!mounted) return;
@@ -76,7 +126,9 @@ class _AuthPageState extends State<AuthPage> {
         SnackBar(content: Text('Error: $e')),
       );
     } finally {
-      if (mounted) setState(() => _loading = false);
+      if (mounted) {
+        setState(() => _loading = false);
+      }
     }
   }
 
@@ -98,7 +150,7 @@ class _AuthPageState extends State<AuthPage> {
     try {
       await Supabase.instance.client.auth.resetPasswordForEmail(
         email,
-        redirectTo: 'aligna://reset-password',
+        redirectTo: 'https://joinaligna.com',
       );
 
       if (!mounted) return;
@@ -200,6 +252,16 @@ class _AuthPageState extends State<AuthPage> {
         borderSide: const BorderSide(color: _primaryPurple, width: 1.4),
       ),
     );
+  }
+
+  void _toggleAuthMode() {
+    setState(() {
+      _isLogin = !_isLogin;
+      _password.clear();
+      _confirmPassword.clear();
+      _obscurePassword = true;
+      _obscureConfirmPassword = true;
+    });
   }
 
   @override
@@ -305,7 +367,8 @@ class _AuthPageState extends State<AuthPage> {
                       icon: Icons.mail_outline_rounded,
                     ),
                     keyboardType: TextInputType.emailAddress,
-                    textInputAction: TextInputAction.next,
+                    textInputAction:
+                    _isLogin ? TextInputAction.next : TextInputAction.next,
                     autofillHints: const [AutofillHints.email],
                   ),
                   const SizedBox(height: 14),
@@ -329,12 +392,45 @@ class _AuthPageState extends State<AuthPage> {
                       ),
                     ),
                     obscureText: _obscurePassword,
-                    textInputAction: TextInputAction.done,
-                    autofillHints: const [AutofillHints.password],
+                    textInputAction:
+                    _isLogin ? TextInputAction.done : TextInputAction.next,
+                    autofillHints: _isLogin
+                        ? const [AutofillHints.password]
+                        : const [AutofillHints.newPassword],
                     onSubmitted: (_) {
-                      if (!busy) _submit();
+                      if (_isLogin && !busy) _submit();
                     },
                   ),
+                  if (!_isLogin) ...[
+                    const SizedBox(height: 14),
+                    TextField(
+                      controller: _confirmPassword,
+                      decoration: _inputDecoration(
+                        label: 'Confirm password',
+                        icon: Icons.lock_outline_rounded,
+                        suffixIcon: IconButton(
+                          onPressed: () {
+                            setState(() {
+                              _obscureConfirmPassword =
+                              !_obscureConfirmPassword;
+                            });
+                          },
+                          icon: Icon(
+                            _obscureConfirmPassword
+                                ? Icons.visibility_off_rounded
+                                : Icons.visibility_rounded,
+                            color: Colors.black45,
+                          ),
+                        ),
+                      ),
+                      obscureText: _obscureConfirmPassword,
+                      textInputAction: TextInputAction.done,
+                      autofillHints: const [AutofillHints.newPassword],
+                      onSubmitted: (_) {
+                        if (!busy) _submit();
+                      },
+                    ),
+                  ],
                   if (_isLogin) ...[
                     const SizedBox(height: 8),
                     Align(
@@ -342,9 +438,7 @@ class _AuthPageState extends State<AuthPage> {
                       child: TextButton(
                         onPressed: busy ? null : _sendPasswordResetEmail,
                         child: Text(
-                          _sendingReset
-                              ? 'Sending...'
-                              : 'Forgot password?',
+                          _sendingReset ? 'Sending...' : 'Forgot password?',
                           style: const TextStyle(
                             fontWeight: FontWeight.w700,
                             color: _primaryPurple,
@@ -384,9 +478,7 @@ class _AuthPageState extends State<AuthPage> {
                   const SizedBox(height: 8),
                   Center(
                     child: TextButton(
-                      onPressed: busy
-                          ? null
-                          : () => setState(() => _isLogin = !_isLogin),
+                      onPressed: busy ? null : _toggleAuthMode,
                       child: Text(
                         _isLogin
                             ? 'No account? Create one'

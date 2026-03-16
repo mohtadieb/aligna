@@ -4,9 +4,16 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 class ResetPasswordPage extends StatefulWidget {
   final VoidCallback? onPasswordUpdated;
 
+  // ADDED:
+  // Pass the recovery token_hash from your deep link into this page.
+  // Example from your deep-link handler:
+  // ResetPasswordPage(recoveryTokenHash: tokenHash)
+  final String? recoveryTokenHash;
+
   const ResetPasswordPage({
     super.key,
     this.onPasswordUpdated,
+    this.recoveryTokenHash, // ADDED
   });
 
   @override
@@ -36,11 +43,64 @@ class _ResetPasswordPageState extends State<ResetPasswordPage> {
   bool _obscure1 = true;
   bool _obscure2 = true;
 
+  // ADDED:
+  // Prevents repeated recovery-session verification calls.
+  bool _recoverySessionPrepared = false;
+
+  @override
+  void initState() {
+    super.initState();
+
+    // ADDED:
+    // If this page was opened from a recovery deep link, try to create
+    // the Supabase recovery session immediately.
+    _prepareRecoverySessionIfNeeded();
+  }
+
   @override
   void dispose() {
     _pw1.dispose();
     _pw2.dispose();
     super.dispose();
+  }
+
+  // ADDED:
+  // This is the key fix:
+  // verifyOTP with OtpType.recovery exchanges the token_hash from the email
+  // link for a valid recovery session inside the app.
+  Future<void> _prepareRecoverySessionIfNeeded() async {
+    if (_recoverySessionPrepared) return;
+
+    // If a session already exists, nothing else is needed.
+    final existingSession = Supabase.instance.client.auth.currentSession;
+    if (existingSession != null) {
+      _recoverySessionPrepared = true;
+      return;
+    }
+
+    final tokenHash = widget.recoveryTokenHash;
+    if (tokenHash == null || tokenHash.isEmpty) {
+      return;
+    }
+
+    try {
+      await Supabase.instance.client.auth.verifyOTP(
+        type: OtpType.recovery,
+        tokenHash: tokenHash,
+      );
+
+      _recoverySessionPrepared = true;
+    } on AuthException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.message)),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error preparing recovery session: $e')),
+      );
+    }
   }
 
   InputDecoration _inputDecoration({
@@ -152,6 +212,20 @@ class _ResetPasswordPageState extends State<ResetPasswordPage> {
     setState(() => _isSaving = true);
 
     try {
+      // ADDED:
+      // Make sure the recovery token has been exchanged for a real session
+      // before trying to update the password.
+      await _prepareRecoverySessionIfNeeded();
+
+      // ADDED:
+      // Guard against calling updateUser without a valid recovery session.
+      final session = Supabase.instance.client.auth.currentSession;
+      if (session == null) {
+        throw const AuthException(
+          'Recovery session could not be established. Please reopen the password reset link and try again.',
+        );
+      }
+
       await Supabase.instance.client.auth.updateUser(
         UserAttributes(password: p1),
       );
