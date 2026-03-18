@@ -1,5 +1,9 @@
+import 'package:app/pages/legal/privacy_policy_page.dart';
+import 'package:app/pages/legal/terms_of_use_page.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+
 
 class AuthPage extends StatefulWidget {
   final bool initialIsLogin;
@@ -264,6 +268,61 @@ class _AuthPageState extends State<AuthPage> {
     });
   }
 
+  Widget _legalRow() {
+    const baseStyle = TextStyle(
+      color: Colors.black54,
+      fontSize: 12,
+      height: 1.35,
+    );
+
+    const linkStyle = TextStyle(
+      color: _primaryPurple,
+      fontSize: 12,
+      height: 1.35,
+      fontWeight: FontWeight.w700,
+    );
+
+    return RichText(
+      textAlign: TextAlign.center,
+      text: TextSpan(
+        style: baseStyle,
+        children: [
+          const TextSpan(
+            text: 'By continuing, you agree to our ',
+          ),
+          TextSpan(
+            text: 'Terms of Use',
+            style: linkStyle,
+            recognizer: TapGestureRecognizer()
+              ..onTap = () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => const TermsOfUsePage(),
+                  ),
+                );
+              },
+          ),
+          const TextSpan(text: ' and '),
+          TextSpan(
+            text: 'Privacy Policy',
+            style: linkStyle,
+            recognizer: TapGestureRecognizer()
+              ..onTap = () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => const PrivacyPolicyPage(),
+                  ),
+                );
+              },
+          ),
+          const TextSpan(text: '.'),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final busy = _loading || _sendingReset;
@@ -367,8 +426,7 @@ class _AuthPageState extends State<AuthPage> {
                       icon: Icons.mail_outline_rounded,
                     ),
                     keyboardType: TextInputType.emailAddress,
-                    textInputAction:
-                    _isLogin ? TextInputAction.next : TextInputAction.next,
+                    textInputAction: TextInputAction.next,
                     autofillHints: const [AutofillHints.email],
                   ),
                   const SizedBox(height: 14),
@@ -457,6 +515,10 @@ class _AuthPageState extends State<AuthPage> {
                         ? Icons.login_rounded
                         : Icons.person_add_alt_1_rounded,
                   ),
+                  const SizedBox(height: 14),
+
+                  Center(child: _legalRow()),
+
                   const SizedBox(height: 12),
                   Container(
                     width: double.infinity,

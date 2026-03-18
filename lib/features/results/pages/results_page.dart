@@ -1327,7 +1327,7 @@ class _ResultsPageState extends State<ResultsPage> {
     ],
     'should phones/social media be fully transparent in a relationship?': [
       'What does trust look like for you without feeling controlled?',
-      'What boundaries would protect the relationship while respecting privacy?',
+      'What boundaries would protect the relationship while respecting legal?',
     ],
     'is yelling ever acceptable during conflict?': [
       'What does a “safe conflict” look like to each of you?',
@@ -1354,7 +1354,7 @@ class _ResultsPageState extends State<ResultsPage> {
     ],
     'Boundaries & communication': [
       'What helps you feel emotionally safe during conflict?',
-      'What are your boundaries around privacy, friends, and communication?',
+      'What are your boundaries around legal, friends, and communication?',
     ],
   };
 

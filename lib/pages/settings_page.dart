@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import 'legal/privacy_policy_page.dart';
+import 'legal/terms_of_use_page.dart';
+
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
 
@@ -78,8 +81,6 @@ class _SettingsPageState extends State<SettingsPage> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-
-                /// Icon
                 Container(
                   width: 58,
                   height: 58,
@@ -93,10 +94,7 @@ class _SettingsPageState extends State<SettingsPage> {
                     size: 28,
                   ),
                 ),
-
                 const SizedBox(height: 16),
-
-                /// Title
                 const Text(
                   'Log out?',
                   textAlign: TextAlign.center,
@@ -106,10 +104,7 @@ class _SettingsPageState extends State<SettingsPage> {
                     color: Colors.black,
                   ),
                 ),
-
                 const SizedBox(height: 10),
-
-                /// Description
                 const Text(
                   'Are you sure you want to log out of your Aligna account on this device?',
                   textAlign: TextAlign.center,
@@ -119,14 +114,9 @@ class _SettingsPageState extends State<SettingsPage> {
                     color: Colors.black54,
                   ),
                 ),
-
                 const SizedBox(height: 20),
-
-                /// Buttons
                 Row(
                   children: [
-
-                    /// Cancel
                     Expanded(
                       child: OutlinedButton(
                         onPressed: () => Navigator.of(context).pop(false),
@@ -147,10 +137,7 @@ class _SettingsPageState extends State<SettingsPage> {
                         ),
                       ),
                     ),
-
                     const SizedBox(width: 12),
-
-                    /// Logout button
                     Expanded(
                       child: DecoratedBox(
                         decoration: BoxDecoration(
@@ -252,7 +239,6 @@ class _SettingsPageState extends State<SettingsPage> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                /// Icon
                 Container(
                   width: 58,
                   height: 58,
@@ -266,10 +252,7 @@ class _SettingsPageState extends State<SettingsPage> {
                     size: 28,
                   ),
                 ),
-
                 const SizedBox(height: 16),
-
-                /// Title
                 const Text(
                   'Delete account?',
                   textAlign: TextAlign.center,
@@ -279,10 +262,7 @@ class _SettingsPageState extends State<SettingsPage> {
                     color: Colors.black,
                   ),
                 ),
-
                 const SizedBox(height: 10),
-
-                /// Description
                 const Text(
                   'This will permanently delete your account and associated data. This action cannot be undone.',
                   textAlign: TextAlign.center,
@@ -292,10 +272,7 @@ class _SettingsPageState extends State<SettingsPage> {
                     color: Colors.black54,
                   ),
                 ),
-
                 const SizedBox(height: 18),
-
-                /// Warning box
                 Container(
                   width: double.infinity,
                   padding: const EdgeInsets.all(14),
@@ -324,13 +301,9 @@ class _SettingsPageState extends State<SettingsPage> {
                     ],
                   ),
                 ),
-
                 const SizedBox(height: 20),
-
-                /// Buttons
                 Row(
                   children: [
-                    /// Cancel
                     Expanded(
                       child: OutlinedButton(
                         onPressed: () => Navigator.of(context).pop(false),
@@ -351,10 +324,7 @@ class _SettingsPageState extends State<SettingsPage> {
                         ),
                       ),
                     ),
-
                     const SizedBox(width: 12),
-
-                    /// Delete button
                     Expanded(
                       child: ElevatedButton(
                         onPressed: () => Navigator.of(context).pop(true),
@@ -407,13 +377,19 @@ class _SettingsPageState extends State<SettingsPage> {
   }
 
   Future<void> _openPrivacyPolicy() async {
-    final uri = Uri.parse('https://joinaligna.com/privacy');
-    await launchUrl(uri, mode: LaunchMode.externalApplication);
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => const PrivacyPolicyPage(),
+      ),
+    );
   }
 
   Future<void> _openTerms() async {
-    final uri = Uri.parse('https://joinaligna.com/terms');
-    await launchUrl(uri, mode: LaunchMode.externalApplication);
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => const TermsOfUsePage(),
+      ),
+    );
   }
 
   PreferredSizeWidget _buildAppBar() {
@@ -630,9 +606,9 @@ class _SettingsPageState extends State<SettingsPage> {
                   trailing: _loggingOut
                       ? _loadingIndicator()
                       : const Icon(
-                          Icons.chevron_right_rounded,
-                          color: Colors.black38,
-                        ),
+                    Icons.chevron_right_rounded,
+                    color: Colors.black38,
+                  ),
                 ),
                 const SizedBox(height: 12),
                 _settingsTile(
@@ -643,13 +619,13 @@ class _SettingsPageState extends State<SettingsPage> {
                   iconBg: _softDanger,
                   iconColor: Colors.red,
                   titleColor: Colors.red,
-                  subtitleColor: Colors.red.shade300,
+                  subtitleColor: Colors.redAccent,
                   trailing: _deleting
                       ? _loadingIndicator()
                       : const Icon(
-                          Icons.chevron_right_rounded,
-                          color: Colors.redAccent,
-                        ),
+                    Icons.chevron_right_rounded,
+                    color: Colors.redAccent,
+                  ),
                 ),
               ],
             ),
