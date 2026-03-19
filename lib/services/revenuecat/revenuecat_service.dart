@@ -1,7 +1,25 @@
-import 'dart:io';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:purchases_flutter/purchases_flutter.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+
+enum RestorePurchaseStatus {
+  restored,
+  noPurchasesFound,
+  belongsToDifferentAccount,
+  cancelled,
+  failed,
+}
+
+class RestorePurchaseResult {
+  final RestorePurchaseStatus status;
+  final String message;
+
+  const RestorePurchaseResult({
+    required this.status,
+    required this.message,
+  });
+}
 
 class RevenueCatService {
   RevenueCatService._();
@@ -24,14 +42,13 @@ class RevenueCatService {
   String? _configuredForUserId;
 
   /// Call this whenever Supabase auth user changes (login/logout/refresh).
-  /// - On logout: clears state + logs out RevenueCat user
+  /// - On logout: clears state
   /// - On login: configures/logs in and refreshes
   Future<void> handleAuthUserChanged() async {
     final user = Supabase.instance.client.auth.currentUser;
 
     if (user == null) {
       await resetForLogout();
-      // mark ready so UI doesn't hang on "…"
       isReady.value = true;
       return;
     }
@@ -43,13 +60,10 @@ class RevenueCatService {
     final user = Supabase.instance.client.auth.currentUser;
     if (user == null) return;
 
-    // We're about to refresh for this user
     isReady.value = false;
 
-    // final apiKey = Platform.isAndroid ? _androidKey : _iosKey;
     final apiKey = _androidKey;
 
-    // First-time configure
     if (!_configured) {
       await Purchases.setLogLevel(kDebugMode ? LogLevel.debug : LogLevel.info);
 
@@ -58,7 +72,6 @@ class RevenueCatService {
 
       Purchases.addCustomerInfoUpdateListener((info) {
         _applyCustomerInfo(info);
-        // listener implies we got info
         isReady.value = true;
       });
 
@@ -69,13 +82,12 @@ class RevenueCatService {
       return;
     }
 
-    // SDK already configured; if user changed, log in new user
     if (_configuredForUserId != user.id) {
       try {
         final result = await Purchases.logIn(user.id);
         _applyCustomerInfo(result.customerInfo);
       } catch (_) {
-        // ignore; we'll refresh anyway
+        // ignore; refresh below will try again
       }
       _configuredForUserId = user.id;
     }
@@ -90,7 +102,6 @@ class RevenueCatService {
     } catch (_) {
       // keep UI stable if RC temporarily unavailable
     } finally {
-      // Whether it succeeded or not, UI can stop showing "…"
       isReady.value = true;
     }
   }
@@ -99,16 +110,100 @@ class RevenueCatService {
     isPro.value = info.entitlements.active.containsKey(entitlementId);
   }
 
-  Future<void> restore() async {
+  bool _looksLikeDifferentAccountError(Object error) {
+    final text = error.toString().toLowerCase();
+    return text.contains('receipt already in use') ||
+        text.contains('receipt is already in use') ||
+        text.contains('already in use by another') ||
+        text.contains('belongs to another') ||
+        text.contains('different app user') ||
+        text.contains('original app user id') ||
+        text.contains('receiptinusebyothersubscriber') ||
+        text.contains('receiptalreadyinuse');
+  }
+
+  bool _looksLikeCancelledError(Object error) {
+    final text = error.toString().toLowerCase();
+    return text.contains('purchasecancelled') ||
+        text.contains('purchase cancelled') ||
+        text.contains('user cancelled') ||
+        text.contains('cancelled');
+  }
+
+  String messageForPurchaseError(Object error) {
+    final text = error.toString().toLowerCase();
+
+    if (_looksLikeDifferentAccountError(error)) {
+      return 'This purchase belongs to another Aligna account. Please log in with the account that originally purchased Aligna Pro.';
+    }
+
+    if (text.contains('already own this item') ||
+        text.contains('already purchased') ||
+        text.contains('productalreadypurchasederror')) {
+      return 'You already own Aligna Pro on this Google Play account. Please log in with the original Aligna account, or use Restore Purchases on that account.';
+    }
+
+    if (_looksLikeCancelledError(error)) {
+      return 'Purchase cancelled.';
+    }
+
+    if (text.contains('network')) {
+      return 'Network error. Please check your connection and try again.';
+    }
+
+    return 'Purchase failed. Please try again.';
+  }
+
+  Future<RestorePurchaseResult> restoreWithResult() async {
     isReady.value = false;
+
     try {
       final info = await Purchases.restorePurchases();
       _applyCustomerInfo(info);
+
+      if (isPro.value) {
+        return const RestorePurchaseResult(
+          status: RestorePurchaseStatus.restored,
+          message: 'Your purchase has been restored.',
+        );
+      }
+
+      return const RestorePurchaseResult(
+        status: RestorePurchaseStatus.noPurchasesFound,
+        message: 'No purchases were found for this account.',
+      );
+    } on PlatformException catch (e) {
+      if (_looksLikeDifferentAccountError(e)) {
+        return const RestorePurchaseResult(
+          status: RestorePurchaseStatus.belongsToDifferentAccount,
+          message:
+          'This purchase belongs to another Aligna account. Please log in with the account that originally purchased Aligna Pro.',
+        );
+      }
+
+      if (_looksLikeCancelledError(e)) {
+        return const RestorePurchaseResult(
+          status: RestorePurchaseStatus.cancelled,
+          message: 'Restore cancelled.',
+        );
+      }
+
+      return RestorePurchaseResult(
+        status: RestorePurchaseStatus.failed,
+        message: 'Restore failed. Please try again.\n\n${e.message ?? e.code}',
+      );
     } catch (_) {
-      // ignore
+      return const RestorePurchaseResult(
+        status: RestorePurchaseStatus.failed,
+        message: 'Restore failed. Please try again.',
+      );
     } finally {
       isReady.value = true;
     }
+  }
+
+  Future<void> restore() async {
+    await restoreWithResult();
   }
 
   /// Clears UI state (no anonymous RevenueCat user creation).
@@ -117,7 +212,6 @@ class RevenueCatService {
     isPro.value = false;
     _configuredForUserId = null;
 
-    // If RC was never configured, we’re still “ready” for UI purposes
     if (!_configured) {
       isReady.value = true;
       return;
@@ -125,7 +219,7 @@ class RevenueCatService {
 
     try {
       await Purchases.invalidateCustomerInfoCache();
-      // ✅ Keep this OFF if you don’t support guest users:
+      // Keep this off if you do not support guest users:
       // await Purchases.logOut();
     } catch (_) {
       // ignore

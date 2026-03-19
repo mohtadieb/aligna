@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
-
-// RevenueCat UI + service
 import 'package:purchases_ui_flutter/purchases_ui_flutter.dart';
+
 import '../../services/revenuecat/revenuecat_service.dart';
 
 class PremiumPaywallPage extends StatefulWidget {
@@ -48,6 +47,13 @@ class _PremiumPaywallPageState extends State<PremiumPaywallPage> {
     super.dispose();
   }
 
+  void _showSnack(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
+  }
+
   void _maybeAutoPopIfPro() {
     if (!mounted) return;
     if (_popped) return;
@@ -80,15 +86,11 @@ class _PremiumPaywallPageState extends State<PremiumPaywallPage> {
       if (RevenueCatService.instance.isPro.value) {
         _maybeAutoPopIfPro();
       } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Purchase not completed.')),
-        );
+        _showSnack('Purchase not completed.');
       }
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Paywall error: $e')),
-      );
+      _showSnack(RevenueCatService.instance.messageForPurchaseError(e));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -100,23 +102,21 @@ class _PremiumPaywallPageState extends State<PremiumPaywallPage> {
 
     try {
       await RevenueCatService.instance.configureIfNeeded();
-      await RevenueCatService.instance.restore();
+
+      final result = await RevenueCatService.instance.restoreWithResult();
       await RevenueCatService.instance.refresh();
 
       if (!mounted) return;
 
-      if (RevenueCatService.instance.isPro.value) {
+      if (result.status == RestorePurchaseStatus.restored) {
         _maybeAutoPopIfPro();
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('No purchases found to restore.')),
-        );
+        return;
       }
-    } catch (e) {
+
+      _showSnack(result.message);
+    } catch (_) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Restore failed: $e')),
-      );
+      _showSnack('Restore failed. Please try again.');
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -127,9 +127,7 @@ class _PremiumPaywallPageState extends State<PremiumPaywallPage> {
       await RevenueCatUI.presentCustomerCenter();
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Customer Center failed: $e')),
-      );
+      _showSnack('Customer Center failed: $e');
     }
   }
 
@@ -402,7 +400,8 @@ class _PremiumPaywallPageState extends State<PremiumPaywallPage> {
             _outlineActionTile(
               icon: Icons.restore_rounded,
               title: 'Restore purchases',
-              subtitle: 'Use this if you already bought Pro on this account.',
+              subtitle:
+              'Use this only if this same Aligna account previously bought Pro.',
               onTap: _busy ? null : _restore,
             ),
             const SizedBox(height: 12),
@@ -425,6 +424,12 @@ class _PremiumPaywallPageState extends State<PremiumPaywallPage> {
                         ? 'Already unlocked'
                         : (_busy ? 'Opening…' : 'Continue'));
 
+                    final helperText = !ready
+                        ? 'Checking your purchase status…'
+                        : (isPro
+                        ? 'You already have Aligna Pro on this account.'
+                        : 'One-time lifetime purchase. If you already bought Pro on another Aligna account, please log back into that original account.');
+
                     return Column(
                       children: [
                         _gradientButton(
@@ -438,11 +443,7 @@ class _PremiumPaywallPageState extends State<PremiumPaywallPage> {
                         ),
                         const SizedBox(height: 10),
                         Text(
-                          !ready
-                              ? 'Checking your purchase status…'
-                              : (isPro
-                              ? 'You already have Aligna Pro on this account.'
-                              : 'One-time lifetime purchase.'),
+                          helperText,
                           style: const TextStyle(color: Colors.black54),
                           textAlign: TextAlign.center,
                         ),
