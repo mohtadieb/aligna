@@ -59,7 +59,7 @@ class _SettingsPageState extends State<SettingsPage> {
   Future<void> _confirmLogout() async {
     final confirmed = await showDialog<bool>(
       context: context,
-      barrierColor: Colors.black.withOpacity(0.28),
+      barrierColor: Colors.black.withValues(alpha: 0.28),
       builder: (context) {
         return Dialog(
           backgroundColor: Colors.transparent,
@@ -72,7 +72,7 @@ class _SettingsPageState extends State<SettingsPage> {
               border: Border.all(color: _cardBorder),
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withOpacity(0.08),
+                  color: Colors.black.withValues(alpha: 0.08),
                   blurRadius: 24,
                   offset: const Offset(0, 12),
                 ),
@@ -145,7 +145,7 @@ class _SettingsPageState extends State<SettingsPage> {
                           borderRadius: BorderRadius.circular(18),
                           boxShadow: [
                             BoxShadow(
-                              color: const Color(0xFF7B5CF0).withOpacity(0.18),
+                              color: const Color(0xFF7B5CF0).withValues(alpha: 0.18),
                               blurRadius: 18,
                               offset: const Offset(0, 8),
                             ),
@@ -217,7 +217,7 @@ class _SettingsPageState extends State<SettingsPage> {
   Future<void> _confirmDelete() async {
     final confirmed = await showDialog<bool>(
       context: context,
-      barrierColor: Colors.black.withOpacity(0.28),
+      barrierColor: Colors.black.withValues(alpha: 0.28),
       builder: (context) {
         return Dialog(
           backgroundColor: Colors.transparent,
@@ -230,7 +230,7 @@ class _SettingsPageState extends State<SettingsPage> {
               border: Border.all(color: _cardBorder),
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withOpacity(0.08),
+                  color: Colors.black.withValues(alpha: 0.08),
                   blurRadius: 24,
                   offset: const Offset(0, 12),
                 ),
@@ -331,7 +331,7 @@ class _SettingsPageState extends State<SettingsPage> {
                         style: ElevatedButton.styleFrom(
                           minimumSize: const Size.fromHeight(52),
                           backgroundColor: Colors.red,
-                          shadowColor: Colors.red.withOpacity(0.25),
+                          shadowColor: Colors.red.withValues(alpha: 0.25),
                           elevation: 0,
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(18),
@@ -425,7 +425,7 @@ class _SettingsPageState extends State<SettingsPage> {
         borderRadius: BorderRadius.circular(30),
         boxShadow: [
           BoxShadow(
-            color: const Color(0xFF7B5CF0).withOpacity(0.18),
+            color: const Color(0xFF7B5CF0).withValues(alpha: 0.18),
             blurRadius: 28,
             offset: const Offset(0, 12),
           ),
@@ -528,7 +528,7 @@ class _SettingsPageState extends State<SettingsPage> {
         borderRadius: BorderRadius.circular(24),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.05),
+            color: Colors.black.withValues(alpha: 0.05),
             blurRadius: 24,
             offset: const Offset(0, 10),
           ),

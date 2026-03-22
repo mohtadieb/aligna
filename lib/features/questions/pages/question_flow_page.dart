@@ -213,7 +213,7 @@ class _QuestionFlowPageState extends State<QuestionFlowPage> {
         borderRadius: BorderRadius.circular(18),
         boxShadow: [
           BoxShadow(
-            color: const Color(0xFF7B5CF0).withOpacity(0.18),
+            color: const Color(0xFF7B5CF0).withValues(alpha: 0.18),
             blurRadius: 18,
             offset: const Offset(0, 8),
           ),
@@ -393,7 +393,7 @@ class _QuestionFlowPageState extends State<QuestionFlowPage> {
                   borderRadius: BorderRadius.circular(28),
                   boxShadow: [
                     BoxShadow(
-                      color: const Color(0xFF7B5CF0).withOpacity(0.18),
+                      color: const Color(0xFF7B5CF0).withValues(alpha: 0.18),
                       blurRadius: 28,
                       offset: const Offset(0, 12),
                     ),
@@ -449,10 +449,10 @@ class _QuestionFlowPageState extends State<QuestionFlowPage> {
                               vertical: 6,
                             ),
                             decoration: BoxDecoration(
-                              color: Colors.white.withOpacity(0.16),
+                              color: Colors.white.withValues(alpha: 0.16),
                               borderRadius: BorderRadius.circular(999),
                               border: Border.all(
-                                color: Colors.white.withOpacity(0.18),
+                                color: Colors.white.withValues(alpha: 0.18),
                               ),
                             ),
                             child: const Text(
@@ -494,7 +494,7 @@ class _QuestionFlowPageState extends State<QuestionFlowPage> {
                     borderRadius: BorderRadius.circular(24),
                     boxShadow: [
                       BoxShadow(
-                        color: Colors.black.withOpacity(0.05),
+                        color: Colors.black.withValues(alpha: 0.05),
                         blurRadius: 24,
                         offset: const Offset(0, 10),
                       ),
@@ -603,7 +603,7 @@ class _QuestionWidget extends StatelessWidget {
                       activeTrackColor: const Color(0xFF7B5CF0),
                       inactiveTrackColor: const Color(0xFFEADFFF),
                       thumbColor: const Color(0xFF6A42E8),
-                      overlayColor: const Color(0xFF7B5CF0).withOpacity(0.12),
+                      overlayColor: const Color(0xFF7B5CF0).withValues(alpha: 0.12),
                     ),
                     child: Slider(
                       min: 1,
@@ -704,7 +704,7 @@ class _ChoiceTile extends StatelessWidget {
           boxShadow: selected
               ? [
             BoxShadow(
-              color: const Color(0xFF7B5CF0).withOpacity(0.08),
+              color: const Color(0xFF7B5CF0).withValues(alpha: 0.08),
               blurRadius: 16,
               offset: const Offset(0, 6),
             ),

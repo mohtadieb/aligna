@@ -59,10 +59,10 @@ class _ArchivedSessionsPageState extends State<ArchivedSessionsPage> {
 
   Color _statusBg(Map<String, dynamic> s) {
     final status = (s['status'] as String?) ?? 'waiting';
-    if (status == 'completed') return Colors.green.withOpacity(0.12);
+    if (status == 'completed') return Colors.green.withValues(alpha: 0.12);
     final partnerId = s['partner_id'] as String?;
-    if (partnerId == null) return Colors.orange.withOpacity(0.12);
-    return Colors.blue.withOpacity(0.12);
+    if (partnerId == null) return Colors.orange.withValues(alpha: 0.12);
+    return Colors.blue.withValues(alpha: 0.12);
   }
 
   Future<void> _unarchive(String sessionId) async {

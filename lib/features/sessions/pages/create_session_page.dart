@@ -96,7 +96,7 @@ class _CreateSessionPageState extends State<CreateSessionPage> {
         borderRadius: BorderRadius.circular(18),
         boxShadow: [
           BoxShadow(
-            color: const Color(0xFF7B5CF0).withOpacity(0.18),
+            color: const Color(0xFF7B5CF0).withValues(alpha: 0.18),
             blurRadius: 18,
             offset: const Offset(0, 8),
           ),
@@ -180,7 +180,7 @@ class _CreateSessionPageState extends State<CreateSessionPage> {
                 borderRadius: BorderRadius.circular(28),
                 boxShadow: [
                   BoxShadow(
-                    color: const Color(0xFF7B5CF0).withOpacity(0.18),
+                    color: const Color(0xFF7B5CF0).withValues(alpha: 0.18),
                     blurRadius: 28,
                     offset: const Offset(0, 12),
                   ),
@@ -218,7 +218,7 @@ class _CreateSessionPageState extends State<CreateSessionPage> {
                 borderRadius: BorderRadius.circular(24),
                 boxShadow: [
                   BoxShadow(
-                    color: Colors.black.withOpacity(0.05),
+                    color: Colors.black.withValues(alpha: 0.05),
                     blurRadius: 24,
                     offset: const Offset(0, 10),
                   ),

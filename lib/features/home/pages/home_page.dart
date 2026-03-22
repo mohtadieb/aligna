@@ -202,10 +202,10 @@ class _HomePageState extends State<HomePage> {
 
   Color _statusBg(Map<String, dynamic> s) {
     final status = (s['status'] as String?) ?? 'waiting';
-    if (status == 'completed') return Colors.green.withOpacity(0.12);
+    if (status == 'completed') return Colors.green.withValues(alpha: 0.12);
     final partnerId = s['partner_id'] as String?;
-    if (partnerId == null) return Colors.orange.withOpacity(0.12);
-    return const Color(0xFF7B5CF0).withOpacity(0.12);
+    if (partnerId == null) return Colors.orange.withValues(alpha: 0.12);
+    return const Color(0xFF7B5CF0).withValues(alpha: 0.12);
   }
 
   Color _statusText(Map<String, dynamic> s) {
@@ -458,7 +458,7 @@ class _HomePageState extends State<HomePage> {
         borderRadius: BorderRadius.circular(28),
         boxShadow: [
           BoxShadow(
-            color: const Color(0xFF7B5CF0).withOpacity(0.18),
+            color: const Color(0xFF7B5CF0).withValues(alpha: 0.18),
             blurRadius: 28,
             offset: const Offset(0, 12),
           ),
@@ -500,7 +500,7 @@ class _HomePageState extends State<HomePage> {
         borderRadius: BorderRadius.circular(18),
         boxShadow: [
           BoxShadow(
-            color: const Color(0xFF7B5CF0).withOpacity(0.18),
+            color: const Color(0xFF7B5CF0).withValues(alpha: 0.18),
             blurRadius: 18,
             offset: const Offset(0, 8),
           ),
@@ -563,7 +563,7 @@ class _HomePageState extends State<HomePage> {
             borderRadius: BorderRadius.circular(28),
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withOpacity(0.05),
+                color: Colors.black.withValues(alpha: 0.05),
                 blurRadius: 24,
                 offset: const Offset(0, 10),
               ),
@@ -625,7 +625,7 @@ class _HomePageState extends State<HomePage> {
           borderRadius: BorderRadius.circular(24),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withOpacity(0.05),
+              color: Colors.black.withValues(alpha: 0.05),
               blurRadius: 22,
               offset: const Offset(0, 10),
             ),

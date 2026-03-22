@@ -276,7 +276,7 @@ class _SessionDashboardPageState extends State<SessionDashboardPage> {
         borderRadius: BorderRadius.circular(28),
         boxShadow: [
           BoxShadow(
-            color: const Color(0xFF7B5CF0).withOpacity(0.18),
+            color: const Color(0xFF7B5CF0).withValues(alpha: 0.18),
             blurRadius: 28,
             offset: const Offset(0, 12),
           ),
@@ -309,9 +309,9 @@ class _SessionDashboardPageState extends State<SessionDashboardPage> {
           Container(
             padding: const EdgeInsets.all(14),
             decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.16),
+              color: Colors.white.withValues(alpha: 0.16),
               borderRadius: BorderRadius.circular(20),
-              border: Border.all(color: Colors.white.withOpacity(0.18)),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
             ),
             child: Row(
               children: [
@@ -385,7 +385,7 @@ class _SessionDashboardPageState extends State<SessionDashboardPage> {
         borderRadius: BorderRadius.circular(24),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.05),
+            color: Colors.black.withValues(alpha: 0.05),
             blurRadius: 24,
             offset: const Offset(0, 10),
           ),
@@ -474,8 +474,8 @@ class _SessionDashboardPageState extends State<SessionDashboardPage> {
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       decoration: BoxDecoration(
         color: partnerJoined
-            ? Colors.green.withOpacity(0.10)
-            : const Color(0xFFFFA96C).withOpacity(0.14),
+            ? Colors.green.withValues(alpha: 0.10)
+            : const Color(0xFFFFA96C).withValues(alpha: 0.14),
         borderRadius: BorderRadius.circular(18),
       ),
       child: Row(
@@ -514,7 +514,7 @@ class _SessionDashboardPageState extends State<SessionDashboardPage> {
         borderRadius: BorderRadius.circular(18),
         boxShadow: [
           BoxShadow(
-            color: const Color(0xFF7B5CF0).withOpacity(0.18),
+            color: const Color(0xFF7B5CF0).withValues(alpha: 0.18),
             blurRadius: 18,
             offset: const Offset(0, 8),
           ),
@@ -802,7 +802,7 @@ class _CompletedCelebrationDialogState extends State<_CompletedCelebrationDialog
         borderRadius: BorderRadius.circular(18),
         boxShadow: [
           BoxShadow(
-            color: const Color(0xFF7B5CF0).withOpacity(0.18),
+            color: const Color(0xFF7B5CF0).withValues(alpha: 0.18),
             blurRadius: 18,
             offset: const Offset(0, 8),
           ),
@@ -897,7 +897,7 @@ class _CompletedCelebrationDialogState extends State<_CompletedCelebrationDialog
               borderRadius: BorderRadius.circular(30),
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withOpacity(0.08),
+                  color: Colors.black.withValues(alpha: 0.08),
                   blurRadius: 28,
                   offset: const Offset(0, 12),
                 ),
@@ -922,10 +922,10 @@ class _CompletedCelebrationDialogState extends State<_CompletedCelebrationDialog
                         width: 68,
                         height: 68,
                         decoration: BoxDecoration(
-                          color: Colors.white.withOpacity(0.18),
+                          color: Colors.white.withValues(alpha: 0.18),
                           borderRadius: BorderRadius.circular(22),
                           border: Border.all(
-                            color: Colors.white.withOpacity(0.18),
+                            color: Colors.white.withValues(alpha: 0.18),
                           ),
                         ),
                         child: const Icon(
